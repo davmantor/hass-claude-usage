@@ -39,20 +39,6 @@ SENSOR_DEFINITIONS = [
     ("week_usage_percent", "Week Usage", "%", "mdi:calendar-week", None),
     ("week_usage_pace", "Week Usage Pace", "%", "mdi:speedometer", None),
     ("week_reset_time", "Weekly Reset Time", None, "mdi:calendar-clock", "timestamp"),
-    (
-        "week_sonnet_usage_percent",
-        "Weekly Sonnet Usage",
-        "%",
-        "mdi:calendar-week",
-        None,
-    ),
-    (
-        "week_sonnet_reset_time",
-        "Weekly Sonnet Reset Time",
-        None,
-        "mdi:calendar-clock",
-        "timestamp",
-    ),
     ("extra_usage_enabled", "Extra Usage Enabled", None, "mdi:toggle-switch", None),
     ("extra_usage_percent", "Extra Usage", "%", "mdi:credit-card", None),
     (

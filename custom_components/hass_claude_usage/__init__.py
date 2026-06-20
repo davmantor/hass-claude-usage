@@ -168,11 +168,6 @@ def _parse_usage(raw: dict[str, Any]) -> dict[str, Any]:
             except (ValueError, TypeError):
                 pass
 
-    seven_day_sonnet = raw.get("seven_day_sonnet")
-    if seven_day_sonnet:
-        data["week_sonnet_usage_percent"] = seven_day_sonnet.get("utilization")
-        data["week_sonnet_reset_time"] = seven_day_sonnet.get("resets_at")
-
     extra = raw.get("extra_usage")
     if extra:
         data["extra_usage_enabled"] = extra.get("is_enabled", False)

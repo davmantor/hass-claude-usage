@@ -57,3 +57,9 @@ def test_parse_timestamp_rejects_naive_datetime() -> None:
 def test_api_error_is_binary_problem_sensor_not_measurement_sensor() -> None:
     assert all(definition[0] != "api_error" for definition in const.SENSOR_DEFINITIONS)
     assert ("api_error", "API Error", "mdi:alert-circle", "problem") in const.BINARY_SENSOR_DEFINITIONS
+
+
+def test_weekly_sonnet_sensors_are_not_created() -> None:
+    sensor_keys = {definition[0] for definition in const.SENSOR_DEFINITIONS}
+    assert "week_sonnet_usage_percent" not in sensor_keys
+    assert "week_sonnet_reset_time" not in sensor_keys

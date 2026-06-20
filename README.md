@@ -14,8 +14,6 @@ original project for the foundation this version builds on.
 - **Session Reset Time** - When the session limit resets
 - **Week Usage** - Current 7-day utilization, all models (%)
 - **Weekly Reset Time** - When the weekly limit resets
-- **Weekly Sonnet Usage** - Current 7-day Sonnet utilization (%)
-- **Weekly Sonnet Reset Time** - When the Sonnet weekly limit resets
 - **Extra Usage Enabled** - Whether extra usage is enabled
 - **Extra Usage** - Extra usage utilization (%)
 - **Extra Usage Credits** - Credits consumed this month
