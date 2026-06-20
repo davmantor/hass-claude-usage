@@ -1,11 +1,11 @@
 {
   "domain": "hass_claude_usage",
   "name": "Claude Usage",
-  "codeowners": ["@trickv"],
+  "codeowners": ["@davmantor"],
   "config_flow": true,
-  "documentation": "https://github.com/trickv/hass-claude-usage",
+  "documentation": "https://github.com/davmantor/hass-claude-usage",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/trickv/hass-claude-usage/issues",
+  "issue_tracker": "https://github.com/davmantor/hass-claude-usage/issues",
   "requirements": [],
   "version": "6"
 }

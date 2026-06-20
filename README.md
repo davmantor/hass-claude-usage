@@ -2,6 +2,10 @@
 
 A custom Home Assistant integration that monitors your Claude (Anthropic) subscription usage.
 
+This repository is a modified fork of
+[trickv/hass-claude-usage](https://github.com/trickv/hass-claude-usage). Thanks to the
+original project for the foundation this version builds on.
+
 ![Claude Usage Screenshot](screenshot.jpg)
 
 ## Sensors
