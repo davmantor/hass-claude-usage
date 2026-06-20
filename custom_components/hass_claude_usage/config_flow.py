@@ -38,6 +38,7 @@ from .const import (
     OAUTH_TOKEN_URL,
     PROFILE_API_URL,
 )
+from .helpers import parse_oauth_code
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -131,20 +132,15 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _exchange_code(self, code: str) -> dict[str, Any] | None:
         """Exchange authorization code for tokens."""
-        # The code from the callback URL may contain a # separator with state
-        code_parts = code.split("#")
-        auth_code = code_parts[0]
-        state = code_parts[1] if len(code_parts) > 1 else ""
-
-        # Validate state parameter to prevent CSRF
-        if state and self._state and state != self._state:
-            _LOGGER.error("OAuth state mismatch - possible CSRF attack")
+        auth_code = parse_oauth_code(code, self._state)
+        if auth_code is None:
+            _LOGGER.error("OAuth state missing or mismatched - possible CSRF attack")
             return None
 
         payload = {
             "grant_type": "authorization_code",
             "code": auth_code,
-            "state": state,
+            "state": self._state or "",
             "client_id": OAUTH_CLIENT_ID,
             "redirect_uri": OAUTH_REDIRECT_URI,
             "code_verifier": self._pkce_verifier,

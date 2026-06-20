@@ -27,10 +27,11 @@ from .const import (
     OAUTH_TOKEN_URL,
     USAGE_API_URL,
 )
+from .helpers import parse_timestamp
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 type ClaudeUsageConfigEntry = ConfigEntry[ClaudeUsageCoordinator]
 
@@ -156,7 +157,9 @@ def _parse_usage(raw: dict[str, Any]) -> dict[str, Any]:
         data["week_reset_time"] = reset_time
         if utilization is not None and reset_time:
             try:
-                reset_dt = datetime.fromisoformat(reset_time)
+                reset_dt = parse_timestamp(reset_time)
+                if reset_dt is None:
+                    raise ValueError
                 now = datetime.now(UTC)
                 week_seconds = 7 * 24 * 60 * 60
                 elapsed = week_seconds - (reset_dt - now).total_seconds()

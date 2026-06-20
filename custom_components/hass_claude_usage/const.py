@@ -69,5 +69,9 @@ SENSOR_DEFINITIONS = [
         "mdi:credit-card-settings",
         None,
     ),
-    ("api_error", "API Error", "errors", "mdi:alert-circle", None),
+]
+
+# Binary sensor definitions: (key, name, icon, device_class)
+BINARY_SENSOR_DEFINITIONS = [
+    ("api_error", "API Error", "mdi:alert-circle", "problem"),
 ]

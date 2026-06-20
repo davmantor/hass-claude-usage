@@ -1,15 +1,12 @@
-"""Sensor platform for Claude Usage integration."""
+"""Binary sensor platform for Claude Usage integration."""
 
 from __future__ import annotations
 
-import logging
-from typing import Any
-
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorStateClass,
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -17,14 +14,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import ClaudeUsageConfigEntry, ClaudeUsageCoordinator
 from .const import (
+    BINARY_SENSOR_DEFINITIONS,
     CONF_ACCOUNT_NAME,
     CONF_SUBSCRIPTION_LEVEL,
     DOMAIN,
-    SENSOR_DEFINITIONS,
 )
-from .helpers import parse_timestamp
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -32,17 +26,18 @@ async def async_setup_entry(
     entry: ClaudeUsageConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Claude Usage sensors."""
+    """Set up Claude Usage binary sensors."""
     coordinator = entry.runtime_data
     async_add_entities(
-        ClaudeUsageSensor(coordinator, entry, key, name, unit, icon, device_class)
-        for key, name, unit, icon, device_class in SENSOR_DEFINITIONS
+        ClaudeUsageBinarySensor(coordinator, entry, key, name, icon, device_class)
+        for key, name, icon, device_class in BINARY_SENSOR_DEFINITIONS
     )
 
 
-class ClaudeUsageSensor(CoordinatorEntity[ClaudeUsageCoordinator], SensorEntity):
-    """A sensor for a Claude usage metric."""
+class ClaudeUsageBinarySensor(CoordinatorEntity[ClaudeUsageCoordinator], BinarySensorEntity):
+    """A binary sensor for a Claude usage diagnostic state."""
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_has_entity_name = True
 
     def __init__(
@@ -51,25 +46,19 @@ class ClaudeUsageSensor(CoordinatorEntity[ClaudeUsageCoordinator], SensorEntity)
         entry: ClaudeUsageConfigEntry,
         key: str,
         name: str,
-        unit: str | None,
         icon: str,
-        device_class: str | None,
+        device_class: str,
     ) -> None:
-        """Initialize the sensor."""
+        """Initialize the binary sensor."""
         super().__init__(coordinator)
         self._key = key
-        self._is_timestamp = device_class == "timestamp"
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_translation_key = key
         self._attr_name = name
-        self._attr_native_unit_of_measurement = unit
         self._attr_icon = icon
-        if self._is_timestamp:
-            self._attr_device_class = SensorDeviceClass.TIMESTAMP
-        elif unit is not None:
-            self._attr_state_class = SensorStateClass.MEASUREMENT
+        if device_class == "problem":
+            self._attr_device_class = BinarySensorDeviceClass.PROBLEM
 
-        # Build device name with account name and subscription level
         account_name = entry.data.get(CONF_ACCOUNT_NAME)
         subscription_level = entry.data.get(CONF_SUBSCRIPTION_LEVEL)
 
@@ -90,22 +79,10 @@ class ClaudeUsageSensor(CoordinatorEntity[ClaudeUsageCoordinator], SensorEntity)
 
     @property
     def available(self) -> bool:
-        """Return True if the sensor value is present in coordinator data."""
-        if not super().available:
-            return False
-        if self.coordinator.data is None:
-            return False
-        return self._key in self.coordinator.data
+        """Return True because this diagnostic reflects coordinator status."""
+        return True
 
     @property
-    def native_value(self) -> Any:
-        """Return the sensor value."""
-        if self.coordinator.data is None:
-            return None
-        value = self.coordinator.data.get(self._key)
-        if value is not None and self._is_timestamp:
-            parsed = parse_timestamp(value)
-            if parsed is None:
-                _LOGGER.warning("Invalid timestamp value for %s: %s", self._key, value)
-            return parsed
-        return value
+    def is_on(self) -> bool:
+        """Return True when the coordinator is reporting an API error."""
+        return not self.coordinator.last_update_success
