@@ -5,7 +5,7 @@ views:
         entities:
           - entity: sensor.claude_usage_session_usage
             name: Session usage
-          - entity: sensor.claude_usage_weekly_usage
+          - entity: sensor.claude_usage_week_usage
             name: Weekly usage
           - entity: sensor.claude_usage_week_usage_pace
             name: Week usage pace
