@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -59,6 +60,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate a legacy entry to stable account identity."""
     if entry.version == 2:
         return True
+    if entry.version != 1:
+        _LOGGER.warning(
+            "Cannot migrate Claude Usage entry: unsupported version %s", entry.version
+        )
+        return False
 
     try:
         data = await _async_get_valid_entry_data(hass, entry)
@@ -122,9 +128,11 @@ async def _async_get_valid_entry_data(
         if not resp.ok:
             raise ConfigEntryAuthFailed(f"Token refresh failed ({resp.status})")
         token_data = await resp.json()
-    except aiohttp.ClientError as err:
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
         raise UpdateFailed(f"Token refresh request failed: {err}") from err
 
+    if not isinstance(token_data, dict):
+        raise UpdateFailed("Token refresh response is not a JSON object")
     if "access_token" not in token_data:
         raise ConfigEntryAuthFailed("Token refresh response missing access_token")
 

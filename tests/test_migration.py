@@ -189,3 +189,188 @@ def test_version_two_entry_is_a_no_op(monkeypatch: pytest.MonkeyPatch) -> None:
         assert entry.options == options
 
     asyncio.run(run())
+
+
+def test_unsupported_version_is_rejected_without_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a future entry version without requests, writes, or downgrade."""
+
+    async def run() -> None:
+        data = {
+            CONF_ACCESS_TOKEN: "access-token",
+            CONF_ACCOUNT_UUID: "account-a",
+        }
+        options = {"update_interval": 900}
+        entry = SimpleNamespace(version=3, unique_id="account-a", data=data, options=options)
+        update_entry = MagicMock()
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(async_update_entry=update_entry),
+        )
+        get_valid_data = AsyncMock(return_value=data)
+        fetch_account_info = AsyncMock(
+            return_value=ClaudeAccountInfo("account-a", "Alice", "Max")
+        )
+        monkeypatch.setattr(integration, "_async_get_valid_entry_data", get_valid_data)
+        monkeypatch.setattr(integration, "async_fetch_account_info", fetch_account_info)
+
+        assert await integration.async_migrate_entry(hass, entry) is False
+
+        get_valid_data.assert_not_awaited()
+        fetch_account_info.assert_not_awaited()
+        update_entry.assert_not_called()
+        assert entry.version == 3
+        assert entry.data == data
+        assert entry.options == options
+
+    asyncio.run(run())
+
+
+def test_token_refresh_returns_merged_copy_without_writing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return refreshed entry data without committing it."""
+
+    async def run() -> None:
+        original_data = {
+            CONF_ACCESS_TOKEN: "old-access-token",
+            CONF_REFRESH_TOKEN: "old-refresh-token",
+            CONF_EXPIRES_AT: 0,
+            "unrelated": "preserved",
+        }
+        entry = SimpleNamespace(data=original_data)
+        update_entry = MagicMock()
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(async_update_entry=update_entry),
+        )
+        response = SimpleNamespace(
+            ok=True,
+            status=200,
+            json=AsyncMock(
+                return_value={
+                    CONF_ACCESS_TOKEN: "new-access-token",
+                    CONF_REFRESH_TOKEN: "new-refresh-token",
+                    "expires_in": 3600,
+                }
+            ),
+        )
+        session = SimpleNamespace(post=AsyncMock(return_value=response))
+        monkeypatch.setattr(
+            integration.aiohttp_client,
+            "async_get_clientsession",
+            lambda hass: session,
+        )
+        monkeypatch.setattr(integration.time, "time", lambda: 1000)
+
+        result = await integration._async_get_valid_entry_data(hass, entry)
+
+        assert result == {
+            CONF_ACCESS_TOKEN: "new-access-token",
+            CONF_REFRESH_TOKEN: "new-refresh-token",
+            CONF_EXPIRES_AT: 4600,
+            "unrelated": "preserved",
+        }
+        assert result is not original_data
+        assert entry.data == original_data
+        update_entry.assert_not_called()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["timeout", "malformed_json", "non_mapping"])
+def test_token_refresh_response_failures_are_update_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    """Normalize transport and malformed refresh responses without writing."""
+
+    async def run() -> None:
+        original_data = {
+            CONF_ACCESS_TOKEN: "old-access-token",
+            CONF_REFRESH_TOKEN: "old-refresh-token",
+            CONF_EXPIRES_AT: 0,
+        }
+        entry = SimpleNamespace(data=original_data)
+        update_entry = MagicMock()
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(async_update_entry=update_entry),
+        )
+
+        if failure == "timeout":
+            post = AsyncMock(side_effect=asyncio.TimeoutError)
+        else:
+            json = (
+                AsyncMock(side_effect=ValueError("invalid JSON"))
+                if failure == "malformed_json"
+                else AsyncMock(return_value=[])
+            )
+            post = AsyncMock(
+                return_value=SimpleNamespace(ok=True, status=200, json=json)
+            )
+        session = SimpleNamespace(post=post)
+        monkeypatch.setattr(
+            integration.aiohttp_client,
+            "async_get_clientsession",
+            lambda hass: session,
+        )
+
+        with pytest.raises(UpdateFailed):
+            await integration._async_get_valid_entry_data(hass, entry)
+
+        assert entry.data == original_data
+        update_entry.assert_not_called()
+
+    asyncio.run(run())
+
+
+def test_coordinator_commits_changed_valid_entry_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Commit refreshed credentials during normal coordinator polling."""
+
+    async def run() -> None:
+        original_data = {CONF_ACCESS_TOKEN: "old-access-token"}
+        refreshed_data = {CONF_ACCESS_TOKEN: "new-access-token"}
+        entry = SimpleNamespace(data=original_data)
+        update_entry = MagicMock()
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(async_update_entry=update_entry),
+        )
+        coordinator = SimpleNamespace(hass=hass, config_entry=entry)
+        monkeypatch.setattr(
+            integration,
+            "_async_get_valid_entry_data",
+            AsyncMock(return_value=refreshed_data),
+        )
+
+        await integration.ClaudeUsageCoordinator._ensure_valid_token(coordinator)
+
+        update_entry.assert_called_once_with(entry, data=refreshed_data)
+
+    asyncio.run(run())
+
+
+def test_coordinator_does_not_commit_unchanged_valid_entry_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid a config-entry write when token data is already current."""
+
+    async def run() -> None:
+        data = {CONF_ACCESS_TOKEN: "access-token"}
+        entry = SimpleNamespace(data=data)
+        update_entry = MagicMock()
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(async_update_entry=update_entry),
+        )
+        coordinator = SimpleNamespace(hass=hass, config_entry=entry)
+        monkeypatch.setattr(
+            integration,
+            "_async_get_valid_entry_data",
+            AsyncMock(return_value=dict(data)),
+        )
+
+        await integration.ClaudeUsageCoordinator._ensure_valid_token(coordinator)
+
+        update_entry.assert_not_called()
+
+    asyncio.run(run())
