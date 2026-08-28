@@ -21,10 +21,11 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import aiohttp_client
 
+from .api import async_fetch_account_info
 from .const import (
-    API_BETA_HEADER,
     CONF_ACCESS_TOKEN,
     CONF_ACCOUNT_NAME,
+    CONF_ACCOUNT_UUID,
     CONF_EXPIRES_AT,
     CONF_REFRESH_TOKEN,
     CONF_SUBSCRIPTION_LEVEL,
@@ -36,7 +37,6 @@ from .const import (
     OAUTH_REDIRECT_URI,
     OAUTH_SCOPES,
     OAUTH_TOKEN_URL,
-    PROFILE_API_URL,
 )
 from .helpers import parse_oauth_code
 
@@ -46,7 +46,7 @@ _LOGGER = logging.getLogger(__name__)
 class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Claude Usage."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -88,22 +88,27 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                 if token_data is None:
                     errors["auth_code"] = "exchange_failed"
                 else:
-                    # Fetch account info for display
-                    account_name, subscription_level = await self._fetch_account_info(
-                        token_data["access_token"]
-                    )
+                    info = await async_fetch_account_info(self.hass, token_data["access_token"])
+                    if info is None:
+                        errors["base"] = "profile_failed"
+                        return self.async_show_form(
+                            step_id="user",
+                            data_schema=vol.Schema({vol.Required("auth_code"): str}),
+                            description_placeholders={"url": oauth_url},
+                            errors=errors,
+                        )
 
                     # Build title with name and subscription level
                     title_parts = ["Claude Usage"]
-                    if account_name:
-                        title_parts.append(f"({account_name}")
-                        if subscription_level:
-                            title_parts.append(f"- {subscription_level})")
+                    if info.account_name:
+                        title_parts.append(f"({info.account_name}")
+                        if info.subscription_level:
+                            title_parts.append(f"- {info.subscription_level})")
                         else:
                             title_parts[-1] += ")"
                     title = " ".join(title_parts)
 
-                    await self.async_set_unique_id(DOMAIN)
+                    await self.async_set_unique_id(info.account_uuid)
                     self._abort_if_unique_id_configured()
                     return self.async_create_entry(
                         title=title,
@@ -111,8 +116,9 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                             CONF_ACCESS_TOKEN: token_data["access_token"],
                             CONF_REFRESH_TOKEN: token_data.get("refresh_token", ""),
                             CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
-                            CONF_ACCOUNT_NAME: account_name,
-                            CONF_SUBSCRIPTION_LEVEL: subscription_level,
+                            CONF_ACCOUNT_UUID: info.account_uuid,
+                            CONF_ACCOUNT_NAME: info.account_name,
+                            CONF_SUBSCRIPTION_LEVEL: info.subscription_level,
                         },
                         options={
                             CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL,
@@ -166,41 +172,6 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
             _LOGGER.exception("Token exchange request failed")
             return None
 
-    async def _fetch_account_info(self, access_token: str) -> tuple[str | None, str | None]:
-        """Fetch account name and subscription level from the profile API."""
-        try:
-            session = aiohttp_client.async_get_clientsession(self.hass)
-            resp = await session.get(
-                PROFILE_API_URL,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "anthropic-beta": API_BETA_HEADER,
-                },
-                timeout=aiohttp.ClientTimeout(total=15),
-            )
-            if not resp.ok:
-                _LOGGER.warning("Failed to fetch account profile (%s)", resp.status)
-                return None, None
-            profile = await resp.json()
-            account = profile.get("account", {})
-
-            # Get account name
-            account_name = (
-                account.get("display_name") or account.get("full_name") or account.get("email")
-            )
-
-            # Get subscription level
-            subscription_level = None
-            if account.get("has_claude_max"):
-                subscription_level = "Max"
-            elif account.get("has_claude_pro"):
-                subscription_level = "Pro"
-
-            return account_name, subscription_level
-        except (aiohttp.ClientError, KeyError):
-            _LOGGER.exception("Error fetching account info")
-            return None, None
-
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Handle reauth when token is invalid."""
         return await self.async_step_reauth_confirm()
@@ -240,20 +211,24 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                 if token_data is None:
                     errors["auth_code"] = "exchange_failed"
                 else:
-                    account_name, subscription_level = await self._fetch_account_info(
-                        token_data["access_token"]
-                    )
+                    info = await async_fetch_account_info(self.hass, token_data["access_token"])
+                    if info is None:
+                        errors["base"] = "profile_failed"
+                    else:
+                        await self.async_set_unique_id(info.account_uuid)
+                        self._abort_if_unique_id_mismatch(reason="wrong_account")
 
-                    return self.async_update_reload_and_abort(
-                        self._get_reauth_entry(),
-                        data_updates={
-                            CONF_ACCESS_TOKEN: token_data["access_token"],
-                            CONF_REFRESH_TOKEN: token_data.get("refresh_token", ""),
-                            CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
-                            CONF_ACCOUNT_NAME: account_name,
-                            CONF_SUBSCRIPTION_LEVEL: subscription_level,
-                        },
-                    )
+                        return self.async_update_reload_and_abort(
+                            self._get_reauth_entry(),
+                            data_updates={
+                                CONF_ACCESS_TOKEN: token_data["access_token"],
+                                CONF_REFRESH_TOKEN: token_data.get("refresh_token", ""),
+                                CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
+                                CONF_ACCOUNT_UUID: info.account_uuid,
+                                CONF_ACCOUNT_NAME: info.account_name,
+                                CONF_SUBSCRIPTION_LEVEL: info.subscription_level,
+                            },
+                        )
 
         return self.async_show_form(
             step_id="reauth_confirm",
