@@ -22,7 +22,7 @@
       "profile_failed": "Failed to verify your Claude account. Please try again."
     },
     "abort": {
-      "already_configured": "Claude Usage is already configured",
+      "already_configured": "This Claude account is already configured.",
       "wrong_account": "The authenticated Claude account does not match this entry.",
       "reauth_successful": "Re-authentication was successful"
     }

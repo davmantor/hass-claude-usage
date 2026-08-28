@@ -29,6 +29,19 @@ def test_parse_account_profile_requires_uuid() -> None:
     assert parse_account_profile({"account": {"email": "alice@example.com"}}) is None
 
 
+@pytest.mark.parametrize("account_uuid", ["", "   ", "\t\r\n"])
+def test_parse_account_profile_rejects_blank_uuid(account_uuid: str) -> None:
+    """Reject UUID values that contain no non-whitespace characters."""
+    assert parse_account_profile({"account": {"uuid": account_uuid}}) is None
+
+
+def test_parse_account_profile_strips_uuid_whitespace() -> None:
+    """Normalize incidental whitespace around the stable account UUID."""
+    info = parse_account_profile({"account": {"uuid": "  account-a\t"}})
+
+    assert info == ClaudeAccountInfo("account-a", None, None)
+
+
 def test_parse_account_profile_detects_pro_subscription() -> None:
     """Report Pro when the account has a Claude Pro subscription."""
     info = parse_account_profile({"account": {"uuid": "account-b", "has_claude_pro": True}})

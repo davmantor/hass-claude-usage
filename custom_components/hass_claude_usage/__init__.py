@@ -77,6 +77,14 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Cannot migrate Claude Usage entry: profile identity unavailable")
         return False
 
+    owner = hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, info.account_uuid)
+    if owner is not None and owner is not entry:
+        _LOGGER.warning(
+            "Cannot migrate Claude Usage entry: account UUID %s is already configured",
+            info.account_uuid,
+        )
+        return False
+
     hass.config_entries.async_update_entry(
         entry,
         data={

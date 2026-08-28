@@ -1,10 +1,13 @@
 """Tests for config entry migration."""
 
 import asyncio
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.config_entries import ConfigEntries, ConfigEntry, SOURCE_USER
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -19,6 +22,143 @@ from custom_components.hass_claude_usage.const import (
     CONF_SUBSCRIPTION_LEVEL,
     DOMAIN,
 )
+
+
+def _registered_entry(
+    hass: HomeAssistant,
+    *,
+    unique_id: str,
+    version: int,
+    data: dict[str, Any],
+    options: dict[str, Any] | None = None,
+) -> ConfigEntry:
+    """Register a real config entry in Home Assistant's entry registry."""
+    entry = ConfigEntry(
+        data=data,
+        discovery_keys=MappingProxyType({}),
+        domain=DOMAIN,
+        minor_version=1,
+        options=options or {},
+        source=SOURCE_USER,
+        title="Claude Usage",
+        unique_id=unique_id,
+        version=version,
+    )
+    hass.config_entries._entries[entry.entry_id] = entry
+    return entry
+
+
+def test_real_registered_entry_migrates_and_reindexes(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Atomically migrate and reindex a registered legacy entry."""
+
+    async def run() -> None:
+        hass = HomeAssistant(str(tmp_path))
+        hass.config_entries = ConfigEntries(hass, {})
+        original_data = {
+            CONF_ACCESS_TOKEN: "old-access-token",
+            CONF_REFRESH_TOKEN: "old-refresh-token",
+            "unrelated": "preserved",
+        }
+        valid_data = {
+            **original_data,
+            CONF_ACCESS_TOKEN: "new-access-token",
+            CONF_EXPIRES_AT: 1234567890,
+        }
+        options = {"update_interval": 900, "unrelated_option": True}
+        entry = _registered_entry(
+            hass,
+            unique_id=DOMAIN,
+            version=1,
+            data=original_data,
+            options=options,
+        )
+        monkeypatch.setattr(
+            integration,
+            "_async_get_valid_entry_data",
+            AsyncMock(return_value=valid_data),
+        )
+        monkeypatch.setattr(
+            integration,
+            "async_fetch_account_info",
+            AsyncMock(return_value=ClaudeAccountInfo("account-a", "Alice", "Max")),
+        )
+
+        assert await integration.async_migrate_entry(hass, entry) is True
+
+        assert entry.version == 2
+        assert entry.unique_id == "account-a"
+        assert dict(entry.data) == {
+            **valid_data,
+            CONF_ACCOUNT_UUID: "account-a",
+            CONF_ACCOUNT_NAME: "Alice",
+            CONF_SUBSCRIPTION_LEVEL: "Max",
+        }
+        assert dict(entry.options) == options
+        assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DOMAIN) is None
+        assert (
+            hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, "account-a") is entry
+        )
+
+    asyncio.run(run())
+
+
+def test_real_registered_entry_collision_does_not_mutate(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject migration when another registered entry owns the account UUID."""
+
+    async def run() -> None:
+        hass = HomeAssistant(str(tmp_path))
+        hass.config_entries = ConfigEntries(hass, {})
+        owner = _registered_entry(
+            hass,
+            unique_id="account-a",
+            version=2,
+            data={CONF_ACCESS_TOKEN: "owner-token", CONF_ACCOUNT_UUID: "account-a"},
+        )
+        original_data = {
+            CONF_ACCESS_TOKEN: "legacy-token",
+            CONF_REFRESH_TOKEN: "legacy-refresh-token",
+            "unrelated": "preserved",
+        }
+        options = {"update_interval": 900}
+        legacy = _registered_entry(
+            hass,
+            unique_id=DOMAIN,
+            version=1,
+            data=original_data,
+            options=options,
+        )
+        update_entry = MagicMock(wraps=hass.config_entries.async_update_entry)
+        monkeypatch.setattr(hass.config_entries, "async_update_entry", update_entry)
+        monkeypatch.setattr(
+            integration,
+            "_async_get_valid_entry_data",
+            AsyncMock(return_value={**original_data, CONF_ACCESS_TOKEN: "refreshed-token"}),
+        )
+        monkeypatch.setattr(
+            integration,
+            "async_fetch_account_info",
+            AsyncMock(return_value=ClaudeAccountInfo("account-a", "Alice", "Max")),
+        )
+
+        assert await integration.async_migrate_entry(hass, legacy) is False
+
+        assert legacy.version == 1
+        assert legacy.unique_id == DOMAIN
+        assert dict(legacy.data) == original_data
+        assert dict(legacy.options) == options
+        update_entry.assert_not_called()
+        assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DOMAIN) is legacy
+        assert (
+            hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, "account-a") is owner
+        )
+
+    asyncio.run(run())
 
 
 def test_migrates_legacy_entry_to_account_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,7 +186,10 @@ def test_migrates_legacy_entry_to_account_uuid(monkeypatch: pytest.MonkeyPatch) 
         )
         update_entry = MagicMock()
         hass = SimpleNamespace(
-            config_entries=SimpleNamespace(async_update_entry=update_entry),
+            config_entries=SimpleNamespace(
+                async_entry_for_domain_unique_id=MagicMock(return_value=entry),
+                async_update_entry=update_entry,
+            ),
         )
         monkeypatch.setattr(
             integration,

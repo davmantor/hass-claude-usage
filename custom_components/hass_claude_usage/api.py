@@ -29,7 +29,7 @@ def parse_account_profile(profile: dict[str, Any]) -> ClaudeAccountInfo | None:
         return None
 
     account_uuid = account.get("uuid")
-    if not isinstance(account_uuid, str) or not account_uuid:
+    if not isinstance(account_uuid, str) or not (account_uuid := account_uuid.strip()):
         return None
 
     account_name = account.get("display_name") or account.get("full_name") or account.get("email")
