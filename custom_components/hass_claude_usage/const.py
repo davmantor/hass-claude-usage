@@ -24,6 +24,9 @@ CONF_EXPIRES_AT = "expires_at"
 CONF_UPDATE_INTERVAL = "update_interval"
 CONF_ACCOUNT_UUID = "account_uuid"
 CONF_ACCOUNT_NAME = "account_name"
+CONF_ORGANIZATION_UUID = "organization_uuid"
+CONF_ORGANIZATION_NAME = "organization_name"
+CONF_ORGANIZATION_TYPE = "organization_type"
 CONF_SUBSCRIPTION_LEVEL = "subscription_level"
 
 # Sensor definitions: (key, name, unit, icon, device_class)

@@ -18,30 +18,65 @@ class ClaudeAccountInfo:
 
     account_uuid: str
     account_name: str | None
+    organization_uuid: str
+    organization_name: str | None
+    organization_type: str | None
     subscription_level: str | None
 
 
+def account_organization_id(info: ClaudeAccountInfo) -> str:
+    """Return the stable account and organization identity."""
+    return f"{info.account_uuid}:{info.organization_uuid}"
+
+
 def parse_account_profile(profile: dict[str, Any]) -> ClaudeAccountInfo | None:
-    """Parse a profile response when it provides a stable account UUID."""
+    """Parse a profile response when it provides stable account and organization UUIDs."""
     account = profile.get("account")
-    if not isinstance(account, dict):
+    organization = profile.get("organization")
+    if not isinstance(account, dict) or not isinstance(organization, dict):
         return None
 
     account_uuid = account.get("uuid")
     if not isinstance(account_uuid, str) or not (account_uuid := account_uuid.strip()):
         return None
 
+    organization_uuid = organization.get("uuid")
+    if not isinstance(organization_uuid, str) or not (
+        organization_uuid := organization_uuid.strip()
+    ):
+        return None
+
     account_name = account.get("display_name") or account.get("full_name") or account.get("email")
     if not isinstance(account_name, str):
         account_name = None
 
-    subscription_level = None
-    if account.get("has_claude_max"):
+    organization_name = organization.get("name")
+    if not isinstance(organization_name, str):
+        organization_name = None
+
+    organization_type = organization.get("organization_type")
+    if not isinstance(organization_type, str):
+        organization_type = None
+
+    subscription_level = {
+        "claude_max": "Max",
+        "claude_pro": "Pro",
+        "claude_team": "Team",
+        "claude_enterprise": "Enterprise",
+    }.get(organization_type)
+    if subscription_level is None and account.get("has_claude_max"):
         subscription_level = "Max"
-    elif account.get("has_claude_pro"):
+    elif subscription_level is None and account.get("has_claude_pro"):
         subscription_level = "Pro"
 
-    return ClaudeAccountInfo(account_uuid, account_name, subscription_level)
+    return ClaudeAccountInfo(
+        account_uuid,
+        account_name,
+        organization_uuid,
+        organization_name,
+        organization_type,
+        subscription_level,
+    )
 
 
 async def async_fetch_account_info(
