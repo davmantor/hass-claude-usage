@@ -98,9 +98,7 @@ def test_real_registered_entry_migrates_and_reindexes(
         }
         assert dict(entry.options) == options
         assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DOMAIN) is None
-        assert (
-            hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, "account-a") is entry
-        )
+        assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, "account-a") is entry
 
     asyncio.run(run())
 
@@ -154,9 +152,7 @@ def test_real_registered_entry_collision_does_not_mutate(
         assert dict(legacy.options) == options
         update_entry.assert_not_called()
         assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DOMAIN) is legacy
-        assert (
-            hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, "account-a") is owner
-        )
+        assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, "account-a") is owner
 
     asyncio.run(run())
 
@@ -317,9 +313,7 @@ def test_version_two_entry_is_a_no_op(monkeypatch: pytest.MonkeyPatch) -> None:
             config_entries=SimpleNamespace(async_update_entry=update_entry),
         )
         get_valid_data = AsyncMock(return_value=data)
-        fetch_account_info = AsyncMock(
-            return_value=ClaudeAccountInfo("account-a", "Alice", "Max")
-        )
+        fetch_account_info = AsyncMock(return_value=ClaudeAccountInfo("account-a", "Alice", "Max"))
         monkeypatch.setattr(integration, "_async_get_valid_entry_data", get_valid_data)
         monkeypatch.setattr(integration, "async_fetch_account_info", fetch_account_info)
 
@@ -351,9 +345,7 @@ def test_unsupported_version_is_rejected_without_side_effects(
             config_entries=SimpleNamespace(async_update_entry=update_entry),
         )
         get_valid_data = AsyncMock(return_value=data)
-        fetch_account_info = AsyncMock(
-            return_value=ClaudeAccountInfo("account-a", "Alice", "Max")
-        )
+        fetch_account_info = AsyncMock(return_value=ClaudeAccountInfo("account-a", "Alice", "Max"))
         monkeypatch.setattr(integration, "_async_get_valid_entry_data", get_valid_data)
         monkeypatch.setattr(integration, "async_fetch_account_info", fetch_account_info)
 
@@ -447,9 +439,7 @@ def test_token_refresh_response_failures_are_update_failed(
                 if failure == "malformed_json"
                 else AsyncMock(return_value=[])
             )
-            post = AsyncMock(
-                return_value=SimpleNamespace(ok=True, status=200, json=json)
-            )
+            post = AsyncMock(return_value=SimpleNamespace(ok=True, status=200, json=json))
         session = SimpleNamespace(post=post)
         monkeypatch.setattr(
             integration.aiohttp_client,

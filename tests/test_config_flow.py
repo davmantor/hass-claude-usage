@@ -73,7 +73,9 @@ async def _async_configure_user(
 ) -> dict[str, Any]:
     """Run the real user flow through Home Assistant's flow manager."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
-    return await hass.config_entries.flow.async_configure(result["flow_id"], {"auth_code": auth_code})
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"auth_code": auth_code}
+    )
 
 
 def test_user_flows_register_profile_uuid_and_reject_duplicate(
@@ -87,7 +89,9 @@ def test_user_flows_register_profile_uuid_and_reject_duplicate(
         monkeypatch.setattr(
             config_flow.ClaudeUsageConfigFlow,
             "_exchange_code",
-            AsyncMock(side_effect=[_token_data("token-a"), _token_data("token-b"), _token_data("token-a")]),
+            AsyncMock(
+                side_effect=[_token_data("token-a"), _token_data("token-b"), _token_data("token-a")]
+            ),
         )
         monkeypatch.setattr(
             config_flow,

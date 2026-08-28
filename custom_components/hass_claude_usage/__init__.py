@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -61,9 +60,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version == 2:
         return True
     if entry.version != 1:
-        _LOGGER.warning(
-            "Cannot migrate Claude Usage entry: unsupported version %s", entry.version
-        )
+        _LOGGER.warning("Cannot migrate Claude Usage entry: unsupported version %s", entry.version)
         return False
 
     try:
@@ -106,9 +103,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ClaudeUsageConfigEn
     coordinator.update_interval = timedelta(seconds=interval)
 
 
-async def _async_get_valid_entry_data(
-    hass: HomeAssistant, entry: ConfigEntry
-) -> dict[str, Any]:
+async def _async_get_valid_entry_data(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     """Return copied config entry data with a valid access token."""
     data = dict(entry.data)
     expires_at = data.get(CONF_EXPIRES_AT, 0)
@@ -136,7 +131,7 @@ async def _async_get_valid_entry_data(
         if not resp.ok:
             raise ConfigEntryAuthFailed(f"Token refresh failed ({resp.status})")
         token_data = await resp.json()
-    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
+    except (aiohttp.ClientError, TimeoutError, ValueError) as err:
         raise UpdateFailed(f"Token refresh request failed: {err}") from err
 
     if not isinstance(token_data, dict):

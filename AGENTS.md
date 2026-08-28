@@ -46,6 +46,14 @@ Refactored from a standalone daemon concept originally explored in the `cc-playg
 - Easier device management and removal
 - Follows HA best practices for service-based integrations
 
+### Multiple Account Entries
+
+**Decision:** Support one Claude account per config entry; multiple entries and accounts are supported.
+
+**Rationale:**
+- The account UUID provides stable identity and duplicate detection per Claude account
+- Separate config entries keep credentials and coordinator state isolated per account
+
 ### Deferred Loading
 
 **Decision:** Sensors show as "unavailable" when their data key is missing from API response.
@@ -248,7 +256,7 @@ challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 ### Non-Goals
 
 - **Real-time Updates:** Usage data is inherently delayed (5-hour buckets), no value in frequent polling
-- **Multiple Accounts:** Integration supports one Claude account per config entry; multiple entries and accounts are supported
+- **Multiple Organizations:** Multiple organizations under one Claude account are not supported because the OAuth profile exposes only one active/default organization
 - **API Key Auth:** Not supported by the usage endpoint, OAuth-only
 
 ## Testing Recommendations

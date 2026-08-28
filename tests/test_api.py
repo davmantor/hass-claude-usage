@@ -56,8 +56,10 @@ def test_async_fetch_account_info_returns_none_on_timeout(
 
     class TimeoutSession:
         async def get(self, *args: object, **kwargs: object) -> None:
-            raise asyncio.TimeoutError
+            raise TimeoutError
 
-    monkeypatch.setattr(api.aiohttp_client, "async_get_clientsession", lambda hass: TimeoutSession())
+    monkeypatch.setattr(
+        api.aiohttp_client, "async_get_clientsession", lambda hass: TimeoutSession()
+    )
 
     assert asyncio.run(api.async_fetch_account_info(object(), "access-token")) is None

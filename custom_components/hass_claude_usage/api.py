@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,7 +61,7 @@ async def async_fetch_account_info(
         if not response.ok:
             return None
         profile = await response.json()
-    except (aiohttp.ClientError, asyncio.TimeoutError, TypeError, ValueError):
+    except (aiohttp.ClientError, TimeoutError, TypeError, ValueError):
         return None
 
     if not isinstance(profile, dict):
