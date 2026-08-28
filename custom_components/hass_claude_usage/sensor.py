@@ -18,6 +18,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import ClaudeUsageConfigEntry, ClaudeUsageCoordinator
 from .const import (
     CONF_ACCOUNT_NAME,
+    CONF_ORGANIZATION_NAME,
+    CONF_ORGANIZATION_UUID,
     CONF_SUBSCRIPTION_LEVEL,
     DOMAIN,
     SENSOR_DEFINITIONS,
@@ -69,18 +71,18 @@ class ClaudeUsageSensor(CoordinatorEntity[ClaudeUsageCoordinator], SensorEntity)
         elif unit is not None:
             self._attr_state_class = SensorStateClass.MEASUREMENT
 
-        # Build device name with account name and subscription level
         account_name = entry.data.get(CONF_ACCOUNT_NAME)
+        organization_name = entry.data.get(CONF_ORGANIZATION_NAME) or entry.data.get(
+            CONF_ORGANIZATION_UUID
+        )
         subscription_level = entry.data.get(CONF_SUBSCRIPTION_LEVEL)
 
-        device_name_parts = ["Claude Usage"]
-        if account_name:
-            device_name_parts.append(f"({account_name}")
-            if subscription_level:
-                device_name_parts.append(f"- {subscription_level})")
-            else:
-                device_name_parts[-1] += ")"
-        device_name = " ".join(device_name_parts)
+        device_name_details = list(
+            dict.fromkeys(filter(None, (account_name, organization_name, subscription_level)))
+        )
+        device_name = "Claude Usage"
+        if device_name_details:
+            device_name += f" ({' - '.join(device_name_details)})"
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},

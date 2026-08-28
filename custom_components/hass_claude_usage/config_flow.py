@@ -21,12 +21,15 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import aiohttp_client
 
-from .api import async_fetch_account_info
+from .api import account_organization_id, async_fetch_account_info
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_ACCOUNT_NAME,
     CONF_ACCOUNT_UUID,
     CONF_EXPIRES_AT,
+    CONF_ORGANIZATION_NAME,
+    CONF_ORGANIZATION_TYPE,
+    CONF_ORGANIZATION_UUID,
     CONF_REFRESH_TOKEN,
     CONF_SUBSCRIPTION_LEVEL,
     CONF_UPDATE_INTERVAL,
@@ -46,7 +49,7 @@ _LOGGER = logging.getLogger(__name__)
 class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Claude Usage."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -98,17 +101,23 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                             errors=errors,
                         )
 
-                    # Build title with name and subscription level
-                    title_parts = ["Claude Usage"]
-                    if info.account_name:
-                        title_parts.append(f"({info.account_name}")
-                        if info.subscription_level:
-                            title_parts.append(f"- {info.subscription_level})")
-                        else:
-                            title_parts[-1] += ")"
-                    title = " ".join(title_parts)
+                    title_details = list(
+                        dict.fromkeys(
+                            filter(
+                                None,
+                                (
+                                    info.account_name,
+                                    info.organization_name or info.organization_uuid,
+                                    info.subscription_level,
+                                ),
+                            )
+                        )
+                    )
+                    title = "Claude Usage"
+                    if title_details:
+                        title += f" ({' - '.join(title_details)})"
 
-                    await self.async_set_unique_id(info.account_uuid)
+                    await self.async_set_unique_id(account_organization_id(info))
                     self._abort_if_unique_id_configured()
                     return self.async_create_entry(
                         title=title,
@@ -118,6 +127,9 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                             CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
                             CONF_ACCOUNT_UUID: info.account_uuid,
                             CONF_ACCOUNT_NAME: info.account_name,
+                            CONF_ORGANIZATION_UUID: info.organization_uuid,
+                            CONF_ORGANIZATION_NAME: info.organization_name,
+                            CONF_ORGANIZATION_TYPE: info.organization_type,
                             CONF_SUBSCRIPTION_LEVEL: info.subscription_level,
                         },
                         options={
@@ -215,7 +227,7 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                     if info is None:
                         errors["base"] = "profile_failed"
                     else:
-                        await self.async_set_unique_id(info.account_uuid)
+                        await self.async_set_unique_id(account_organization_id(info))
                         self._abort_if_unique_id_mismatch(reason="wrong_account")
 
                         return self.async_update_reload_and_abort(
@@ -226,6 +238,9 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                                 CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
                                 CONF_ACCOUNT_UUID: info.account_uuid,
                                 CONF_ACCOUNT_NAME: info.account_name,
+                                CONF_ORGANIZATION_UUID: info.organization_uuid,
+                                CONF_ORGANIZATION_NAME: info.organization_name,
+                                CONF_ORGANIZATION_TYPE: info.organization_type,
                                 CONF_SUBSCRIPTION_LEVEL: info.subscription_level,
                             },
                         )

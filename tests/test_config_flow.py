@@ -12,15 +12,20 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.hass_claude_usage import config_flow
 from custom_components.hass_claude_usage.api import ClaudeAccountInfo
+from custom_components.hass_claude_usage.binary_sensor import ClaudeUsageBinarySensor
 from custom_components.hass_claude_usage.const import (
     CONF_ACCESS_TOKEN,
     CONF_ACCOUNT_NAME,
     CONF_ACCOUNT_UUID,
     CONF_EXPIRES_AT,
+    CONF_ORGANIZATION_NAME,
+    CONF_ORGANIZATION_TYPE,
+    CONF_ORGANIZATION_UUID,
     CONF_REFRESH_TOKEN,
     CONF_SUBSCRIPTION_LEVEL,
     DOMAIN,
 )
+from custom_components.hass_claude_usage.sensor import ClaudeUsageSensor
 
 
 class _UsageResponse:
@@ -78,11 +83,11 @@ async def _async_configure_user(
     )
 
 
-def test_user_flows_register_profile_uuid_and_reject_duplicate(
+def test_user_flows_scope_entries_by_account_and_organization(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Create entries for distinct profiles and abort a duplicate profile."""
+    """Create entries for two organizations and abort a duplicate pair."""
 
     async def run() -> None:
         hass = await _async_hass(tmp_path, monkeypatch)
@@ -98,9 +103,30 @@ def test_user_flows_register_profile_uuid_and_reject_duplicate(
             "async_fetch_account_info",
             AsyncMock(
                 side_effect=[
-                    ClaudeAccountInfo("account-a", "Alice", "Max"),
-                    ClaudeAccountInfo("account-b", "Bob", "Pro"),
-                    ClaudeAccountInfo("account-a", "Alice", "Max"),
+                    ClaudeAccountInfo(
+                        "account-a",
+                        "Alice",
+                        "personal-org",
+                        "Alice Personal",
+                        "claude_max",
+                        "Max",
+                    ),
+                    ClaudeAccountInfo(
+                        "account-a",
+                        "Alice",
+                        "team-org",
+                        "Example Team",
+                        "claude_team",
+                        "Team",
+                    ),
+                    ClaudeAccountInfo(
+                        "account-a",
+                        "Alice",
+                        "team-org",
+                        "Example Team",
+                        "claude_team",
+                        "Team",
+                    ),
                 ]
             ),
         )
@@ -111,10 +137,21 @@ def test_user_flows_register_profile_uuid_and_reject_duplicate(
 
         first_entry = first["result"]
         second_entry = second["result"]
-        assert first_entry.unique_id == "account-a"
-        assert second_entry.unique_id == "account-b"
+        assert first_entry.version == 3
+        assert second_entry.version == 3
+        assert first_entry.unique_id == "account-a:personal-org"
+        assert second_entry.unique_id == "account-a:team-org"
         assert first_entry.data[CONF_ACCOUNT_UUID] == "account-a"
-        assert second_entry.data[CONF_ACCOUNT_UUID] == "account-b"
+        assert second_entry.data[CONF_ACCOUNT_UUID] == "account-a"
+        assert first_entry.data[CONF_ORGANIZATION_UUID] == "personal-org"
+        assert first_entry.data[CONF_ORGANIZATION_NAME] == "Alice Personal"
+        assert first_entry.data[CONF_ORGANIZATION_TYPE] == "claude_max"
+        assert second_entry.data[CONF_ORGANIZATION_UUID] == "team-org"
+        assert second_entry.data[CONF_ORGANIZATION_NAME] == "Example Team"
+        assert second_entry.data[CONF_ORGANIZATION_TYPE] == "claude_team"
+        assert first_entry.title != second_entry.title
+        assert "Alice Personal" in first_entry.title
+        assert "Example Team" in second_entry.title
         assert duplicate["type"] == "abort"
         assert duplicate["reason"] == "already_configured"
         assert len(hass.config_entries.async_entries(DOMAIN)) == 2
@@ -150,6 +187,97 @@ def test_user_flow_requires_profile_before_creating_entry(
     asyncio.run(run())
 
 
+def test_platform_device_names_include_organization(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Include stored organization context in both platform device names."""
+
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        entry = await _async_create_entry_for_reauth(hass, monkeypatch)
+        await hass.async_block_till_done()
+
+        sensor = ClaudeUsageSensor(
+            entry.runtime_data,
+            entry,
+            "test_sensor",
+            "Test Sensor",
+            None,
+            "mdi:test-tube",
+            None,
+        )
+        binary_sensor = ClaudeUsageBinarySensor(
+            entry.runtime_data,
+            entry,
+            "test_binary_sensor",
+            "Test Binary Sensor",
+            "mdi:test-tube",
+            "problem",
+        )
+
+        assert "Alice Personal" in sensor.device_info["name"]
+        assert "Alice Personal" in binary_sensor.device_info["name"]
+
+    asyncio.run(run())
+
+
+def test_organization_uuid_is_display_fallback(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the required organization UUID when its optional name is absent."""
+
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data()),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(
+                return_value=ClaudeAccountInfo(
+                    "account-a",
+                    "Alice",
+                    "personal-org",
+                    None,
+                    "claude_max",
+                    "Max",
+                )
+            ),
+        )
+
+        result = await _async_configure_user(hass, "code")
+        entry = result["result"]
+        await hass.async_block_till_done()
+        sensor = ClaudeUsageSensor(
+            entry.runtime_data,
+            entry,
+            "test_sensor",
+            "Test Sensor",
+            None,
+            "mdi:test-tube",
+            None,
+        )
+        binary_sensor = ClaudeUsageBinarySensor(
+            entry.runtime_data,
+            entry,
+            "test_binary_sensor",
+            "Test Binary Sensor",
+            "mdi:test-tube",
+            "problem",
+        )
+
+        assert "personal-org" in entry.title
+        assert "personal-org" in sensor.device_info["name"]
+        assert "personal-org" in binary_sensor.device_info["name"]
+
+    asyncio.run(run())
+
+
 async def _async_create_entry_for_reauth(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
@@ -163,7 +291,16 @@ async def _async_create_entry_for_reauth(
     monkeypatch.setattr(
         config_flow,
         "async_fetch_account_info",
-        AsyncMock(return_value=ClaudeAccountInfo("account-a", "Alice", "Max")),
+        AsyncMock(
+            return_value=ClaudeAccountInfo(
+                "account-a",
+                "Alice",
+                "personal-org",
+                "Alice Personal",
+                "claude_max",
+                "Max",
+            )
+        ),
     )
     result = await _async_configure_user(hass, "initial-code")
     return result["result"]
@@ -185,7 +322,7 @@ def test_reauth_updates_matching_entry_after_profile_validation(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Update a real entry when its reauthenticated profile UUID matches."""
+    """Update a real entry when its reauthenticated composite identity matches."""
 
     async def run() -> None:
         hass = await _async_hass(tmp_path, monkeypatch)
@@ -198,19 +335,31 @@ def test_reauth_updates_matching_entry_after_profile_validation(
         monkeypatch.setattr(
             config_flow,
             "async_fetch_account_info",
-            AsyncMock(return_value=ClaudeAccountInfo("account-a", "Alice New", "Pro")),
+            AsyncMock(
+                return_value=ClaudeAccountInfo(
+                    "account-a",
+                    "Alice New",
+                    "personal-org",
+                    "Alice Personal Updated",
+                    "claude_pro",
+                    "Pro",
+                )
+            ),
         )
 
         result = await _async_configure_reauth(hass, entry.entry_id)
 
         assert result["type"] == "abort"
         assert result["reason"] == "reauth_successful"
-        assert entry.unique_id == "account-a"
+        assert entry.unique_id == "account-a:personal-org"
         assert entry.data[CONF_ACCESS_TOKEN] == "refreshed-access-token"
         assert entry.data[CONF_REFRESH_TOKEN] == "new-refresh-token"
         assert CONF_EXPIRES_AT in entry.data
         assert entry.data[CONF_ACCOUNT_UUID] == "account-a"
         assert entry.data[CONF_ACCOUNT_NAME] == "Alice New"
+        assert entry.data[CONF_ORGANIZATION_UUID] == "personal-org"
+        assert entry.data[CONF_ORGANIZATION_NAME] == "Alice Personal Updated"
+        assert entry.data[CONF_ORGANIZATION_TYPE] == "claude_pro"
         assert entry.data[CONF_SUBSCRIPTION_LEVEL] == "Pro"
 
     asyncio.run(run())
@@ -220,7 +369,7 @@ def test_reauth_rejects_mismatched_profile_without_updating_entry(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep a real entry unchanged when reauthentication identifies another account."""
+    """Keep an entry unchanged when reauth selects another organization."""
 
     async def run() -> None:
         hass = await _async_hass(tmp_path, monkeypatch)
@@ -234,14 +383,23 @@ def test_reauth_rejects_mismatched_profile_without_updating_entry(
         monkeypatch.setattr(
             config_flow,
             "async_fetch_account_info",
-            AsyncMock(return_value=ClaudeAccountInfo("account-b", "Bob", "Pro")),
+            AsyncMock(
+                return_value=ClaudeAccountInfo(
+                    "account-a",
+                    "Alice",
+                    "team-org",
+                    "Example Team",
+                    "claude_team",
+                    "Team",
+                )
+            ),
         )
 
         result = await _async_configure_reauth(hass, entry.entry_id)
 
         assert result["type"] == "abort"
         assert result["reason"] == "wrong_account"
-        assert entry.unique_id == "account-a"
+        assert entry.unique_id == "account-a:personal-org"
         assert entry.data == original_data
 
     asyncio.run(run())
