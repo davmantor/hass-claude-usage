@@ -15,11 +15,15 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .api import async_fetch_account_info
 from .const import (
     API_BETA_HEADER,
     CONF_ACCESS_TOKEN,
+    CONF_ACCOUNT_NAME,
+    CONF_ACCOUNT_UUID,
     CONF_EXPIRES_AT,
     CONF_REFRESH_TOKEN,
+    CONF_SUBSCRIPTION_LEVEL,
     CONF_UPDATE_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
@@ -51,11 +55,85 @@ async def async_unload_entry(hass: HomeAssistant, entry: ClaudeUsageConfigEntry)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate a legacy entry to stable account identity."""
+    if entry.version == 2:
+        return True
+
+    try:
+        data = await _async_get_valid_entry_data(hass, entry)
+    except (ConfigEntryAuthFailed, UpdateFailed) as err:
+        _LOGGER.warning("Cannot migrate Claude Usage entry: token validation failed: %s", err)
+        return False
+
+    info = await async_fetch_account_info(hass, data[CONF_ACCESS_TOKEN])
+    if info is None:
+        _LOGGER.warning("Cannot migrate Claude Usage entry: profile identity unavailable")
+        return False
+
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **data,
+            CONF_ACCOUNT_UUID: info.account_uuid,
+            CONF_ACCOUNT_NAME: info.account_name,
+            CONF_SUBSCRIPTION_LEVEL: info.subscription_level,
+        },
+        unique_id=info.account_uuid,
+        version=2,
+    )
+    return True
+
+
 async def _async_update_listener(hass: HomeAssistant, entry: ClaudeUsageConfigEntry) -> None:
     """Handle options update."""
     coordinator: ClaudeUsageCoordinator = entry.runtime_data
     interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
     coordinator.update_interval = timedelta(seconds=interval)
+
+
+async def _async_get_valid_entry_data(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> dict[str, Any]:
+    """Return copied config entry data with a valid access token."""
+    data = dict(entry.data)
+    expires_at = data.get(CONF_EXPIRES_AT, 0)
+    if time.time() < expires_at - 60:
+        return data
+
+    refresh_token = data.get(CONF_REFRESH_TOKEN)
+    if not refresh_token:
+        raise UpdateFailed("No refresh token available")
+
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": OAUTH_CLIENT_ID,
+    }
+
+    try:
+        session = aiohttp_client.async_get_clientsession(hass)
+        resp = await session.post(
+            OAUTH_TOKEN_URL,
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=aiohttp.ClientTimeout(total=15),
+        )
+        if not resp.ok:
+            raise ConfigEntryAuthFailed(f"Token refresh failed ({resp.status})")
+        token_data = await resp.json()
+    except aiohttp.ClientError as err:
+        raise UpdateFailed(f"Token refresh request failed: {err}") from err
+
+    if "access_token" not in token_data:
+        raise ConfigEntryAuthFailed("Token refresh response missing access_token")
+
+    return {
+        **data,
+        CONF_ACCESS_TOKEN: token_data["access_token"],
+        CONF_REFRESH_TOKEN: token_data.get("refresh_token", refresh_token),
+        CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
+    }
 
 
 class ClaudeUsageCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -100,44 +178,9 @@ class ClaudeUsageCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _ensure_valid_token(self) -> None:
         """Refresh the access token if expired."""
-        expires_at = self.config_entry.data.get(CONF_EXPIRES_AT, 0)
-        if time.time() < expires_at - 60:
-            return
-
-        refresh_token = self.config_entry.data.get(CONF_REFRESH_TOKEN)
-        if not refresh_token:
-            raise UpdateFailed("No refresh token available")
-
-        payload = {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": OAUTH_CLIENT_ID,
-        }
-
-        try:
-            session = aiohttp_client.async_get_clientsession(self.hass)
-            resp = await session.post(
-                OAUTH_TOKEN_URL,
-                data=payload,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=aiohttp.ClientTimeout(total=15),
-            )
-            if not resp.ok:
-                raise ConfigEntryAuthFailed(f"Token refresh failed ({resp.status})")
-            token_data = await resp.json()
-        except aiohttp.ClientError as err:
-            raise UpdateFailed(f"Token refresh request failed: {err}") from err
-
-        if "access_token" not in token_data:
-            raise ConfigEntryAuthFailed("Token refresh response missing access_token")
-
-        new_data = {
-            **self.config_entry.data,
-            CONF_ACCESS_TOKEN: token_data["access_token"],
-            CONF_REFRESH_TOKEN: token_data.get("refresh_token", refresh_token),
-            CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
-        }
-        self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+        data = await _async_get_valid_entry_data(self.hass, self.config_entry)
+        if data != self.config_entry.data:
+            self.hass.config_entries.async_update_entry(self.config_entry, data=data)
 
 
 def _parse_usage(raw: dict[str, Any]) -> dict[str, Any]:
