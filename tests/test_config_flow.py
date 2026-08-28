@@ -2,9 +2,13 @@
 
 import asyncio
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.data_entry_flow import AbortFlow
+from homeassistant import loader
+from homeassistant.bootstrap import async_load_base_functionality
+from homeassistant.config_entries import ConfigEntries, SOURCE_REAUTH, SOURCE_USER
+from homeassistant.core import HomeAssistant
 
 from custom_components.hass_claude_usage import config_flow
 from custom_components.hass_claude_usage.api import ClaudeAccountInfo
@@ -15,170 +19,251 @@ from custom_components.hass_claude_usage.const import (
     CONF_EXPIRES_AT,
     CONF_REFRESH_TOKEN,
     CONF_SUBSCRIPTION_LEVEL,
+    DOMAIN,
 )
 
 
-def _token_data() -> dict[str, Any]:
+class _UsageResponse:
+    """Minimal successful response for the integration's usage request."""
+
+    status = 200
+
+    def raise_for_status(self) -> None:
+        """Accept the response."""
+
+    async def json(self) -> dict[str, Any]:
+        """Return an empty usage payload."""
+        return {}
+
+
+class _UsageSession:
+    """Keep entry setup local by serving the usage request."""
+
+    async def get(self, *args: object, **kwargs: object) -> _UsageResponse:
+        """Return the usage response."""
+        return _UsageResponse()
+
+
+async def _async_hass(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> HomeAssistant:
+    """Create Home Assistant with its real config entry flow manager."""
+    hass = HomeAssistant(str(tmp_path))
+    loader.async_setup(hass)
+    hass.config_entries = ConfigEntries(hass, {})
+    await loader.async_get_custom_components(hass)
+    await async_load_base_functionality(hass)
+    hass.data[loader.DATA_COMPONENTS][f"{DOMAIN}.config_flow"] = config_flow
+
+    from custom_components.hass_claude_usage import aiohttp_client
+
+    monkeypatch.setattr(aiohttp_client, "async_get_clientsession", lambda hass: _UsageSession())
+    return hass
+
+
+def _token_data(access_token: str = "new-access-token") -> dict[str, Any]:
     return {
-        "access_token": "new-access-token",
+        "access_token": access_token,
         "refresh_token": "new-refresh-token",
         "expires_in": 3600,
     }
 
 
-def _new_flow(
-    monkeypatch: pytest.MonkeyPatch,
-    info: ClaudeAccountInfo,
-    events: list[tuple[str, Any]],
-) -> config_flow.ClaudeUsageConfigFlow:
-    flow = config_flow.ClaudeUsageConfigFlow()
-
-    async def exchange_code(code: str) -> dict[str, Any]:
-        return _token_data()
-
-    async def set_unique_id(unique_id: str) -> None:
-        events.append(("unique_id", unique_id))
-
-    async def fetch_account_info(hass: object, access_token: str) -> ClaudeAccountInfo:
-        return info
-
-    def abort_if_configured() -> None:
-        events.append(("abort_if_configured", None))
-
-    def create_entry(**kwargs: Any) -> dict[str, Any]:
-        events.append(("create_entry", kwargs))
-        return kwargs
-
-    monkeypatch.setattr(flow, "_exchange_code", exchange_code)
-    monkeypatch.setattr(flow, "async_set_unique_id", set_unique_id)
-    monkeypatch.setattr(flow, "_abort_if_unique_id_configured", abort_if_configured)
-    monkeypatch.setattr(flow, "async_create_entry", create_entry)
-    monkeypatch.setattr(config_flow, "async_fetch_account_info", fetch_account_info, raising=False)
-    return flow
+async def _async_configure_user(
+    hass: HomeAssistant,
+    auth_code: str,
+) -> dict[str, Any]:
+    """Run the real user flow through Home Assistant's flow manager."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    return await hass.config_entries.flow.async_configure(result["flow_id"], {"auth_code": auth_code})
 
 
-def test_user_flows_create_entries_for_their_profile_accounts(
+def test_user_flows_register_profile_uuid_and_reject_duplicate(
+    tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Allow separately authenticated Claude accounts to create separate entries."""
-    first_events: list[tuple[str, Any]] = []
-    second_events: list[tuple[str, Any]] = []
-    first_flow = _new_flow(
-        monkeypatch,
-        ClaudeAccountInfo("account-a", "Alice", "Max"),
-        first_events,
-    )
-    first_result = asyncio.run(first_flow.async_step_user({"auth_code": "first-code"}))
+    """Create entries for distinct profiles and abort a duplicate profile."""
 
-    second_flow = _new_flow(
-        monkeypatch,
-        ClaudeAccountInfo("account-b", "Bob", "Pro"),
-        second_events,
-    )
-    second_result = asyncio.run(second_flow.async_step_user({"auth_code": "second-code"}))
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(side_effect=[_token_data("token-a"), _token_data("token-b"), _token_data("token-a")]),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(
+                side_effect=[
+                    ClaudeAccountInfo("account-a", "Alice", "Max"),
+                    ClaudeAccountInfo("account-b", "Bob", "Pro"),
+                    ClaudeAccountInfo("account-a", "Alice", "Max"),
+                ]
+            ),
+        )
 
-    assert first_events[0] == ("unique_id", "account-a")
-    assert second_events[0] == ("unique_id", "account-b")
-    assert first_result["data"][CONF_ACCOUNT_UUID] == "account-a"
-    assert second_result["data"][CONF_ACCOUNT_UUID] == "account-b"
+        first = await _async_configure_user(hass, "first-code")
+        second = await _async_configure_user(hass, "second-code")
+        duplicate = await _async_configure_user(hass, "duplicate-code")
+
+        first_entry = first["result"]
+        second_entry = second["result"]
+        assert first_entry.unique_id == "account-a"
+        assert second_entry.unique_id == "account-b"
+        assert first_entry.data[CONF_ACCOUNT_UUID] == "account-a"
+        assert second_entry.data[CONF_ACCOUNT_UUID] == "account-b"
+        assert duplicate["type"] == "abort"
+        assert duplicate["reason"] == "already_configured"
+        assert len(hass.config_entries.async_entries(DOMAIN)) == 2
+
+    asyncio.run(run())
 
 
-def test_user_flow_checks_for_duplicate_after_setting_profile_uuid(
+def test_user_flow_requires_profile_before_creating_entry(
+    tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Check duplicates only after the profile UUID is the flow identity."""
-    events: list[tuple[str, Any]] = []
-    flow = _new_flow(
-        monkeypatch,
-        ClaudeAccountInfo("account-a", "Alice", "Max"),
-        events,
-    )
+    """Keep setup on the form when the authenticated profile cannot be verified."""
 
-    asyncio.run(flow.async_step_user({"auth_code": "code"}))
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data()),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(return_value=None),
+        )
 
-    assert events[:2] == [
-        ("unique_id", "account-a"),
-        ("abort_if_configured", None),
-    ]
+        result = await _async_configure_user(hass, "code")
+
+        assert result["type"] == "form"
+        assert result["errors"] == {"base": "profile_failed"}
+        assert hass.config_entries.async_entries(DOMAIN) == []
+
+    asyncio.run(run())
 
 
-def _reauth_flow(
+async def _async_create_entry_for_reauth(
+    hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
-    info: ClaudeAccountInfo,
-    events: list[tuple[str, Any]],
-    abort_mismatch: bool = False,
-) -> config_flow.ClaudeUsageConfigFlow:
-    flow = config_flow.ClaudeUsageConfigFlow()
-    entry = object()
-
-    async def exchange_code(code: str) -> dict[str, Any]:
-        return _token_data()
-
-    async def fetch_account_info(hass: object, access_token: str) -> ClaudeAccountInfo:
-        return info
-
-    async def set_unique_id(unique_id: str) -> None:
-        events.append(("unique_id", unique_id))
-
-    def ensure_matching_account(*, reason: str) -> None:
-        events.append(("abort_if_unique_id_mismatch", reason))
-        if abort_mismatch:
-            raise AbortFlow(reason)
-
-    def update_entry(entry: object, **kwargs: Any) -> dict[str, Any]:
-        events.append(("update_entry", kwargs))
-        return kwargs
-
-    monkeypatch.setattr(flow, "_exchange_code", exchange_code)
-    monkeypatch.setattr(flow, "async_set_unique_id", set_unique_id)
-    monkeypatch.setattr(flow, "_abort_if_unique_id_mismatch", ensure_matching_account)
-    monkeypatch.setattr(flow, "_get_reauth_entry", lambda: entry)
-    monkeypatch.setattr(flow, "async_update_reload_and_abort", update_entry)
-    monkeypatch.setattr(config_flow, "async_fetch_account_info", fetch_account_info)
-    return flow
-
-
-def test_reauth_updates_tokens_only_after_confirming_same_profile_account(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Refresh an entry only after confirming the OAuth profile account identity."""
-    events: list[tuple[str, Any]] = []
-    flow = _reauth_flow(
-        monkeypatch,
-        ClaudeAccountInfo("account-a", "Alice", "Max"),
-        events,
+) -> Any:
+    """Create the existing config entry through the real user flow."""
+    monkeypatch.setattr(
+        config_flow.ClaudeUsageConfigFlow,
+        "_exchange_code",
+        AsyncMock(return_value=_token_data("old-access-token")),
     )
-
-    result = asyncio.run(flow.async_step_reauth_confirm({"auth_code": "code"}))
-
-    assert events[:2] == [
-        ("unique_id", "account-a"),
-        ("abort_if_unique_id_mismatch", "wrong_account"),
-    ]
-    assert result["data_updates"][CONF_ACCOUNT_UUID] == "account-a"
-    assert result["data_updates"][CONF_ACCOUNT_NAME] == "Alice"
-    assert result["data_updates"][CONF_SUBSCRIPTION_LEVEL] == "Max"
-    assert result["data_updates"][CONF_ACCESS_TOKEN] == "new-access-token"
-    assert result["data_updates"][CONF_REFRESH_TOKEN] == "new-refresh-token"
-    assert CONF_EXPIRES_AT in result["data_updates"]
+    monkeypatch.setattr(
+        config_flow,
+        "async_fetch_account_info",
+        AsyncMock(return_value=ClaudeAccountInfo("account-a", "Alice", "Max")),
+    )
+    result = await _async_configure_user(hass, "initial-code")
+    return result["result"]
 
 
-def test_reauth_does_not_update_entry_when_profile_account_mismatches(
+async def _async_configure_reauth(
+    hass: HomeAssistant,
+    entry_id: str,
+) -> dict[str, Any]:
+    """Run the real reauthentication flow through Home Assistant's manager."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_REAUTH, "entry_id": entry_id},
+    )
+    return await hass.config_entries.flow.async_configure(result["flow_id"], {"auth_code": "code"})
+
+
+def test_reauth_updates_matching_entry_after_profile_validation(
+    tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Abort before changing stored credentials for a different Claude account."""
-    events: list[tuple[str, Any]] = []
-    flow = _reauth_flow(
-        monkeypatch,
-        ClaudeAccountInfo("account-b", "Bob", "Pro"),
-        events,
-        abort_mismatch=True,
-    )
+    """Update a real entry when its reauthenticated profile UUID matches."""
 
-    with pytest.raises(AbortFlow, match="wrong_account"):
-        asyncio.run(flow.async_step_reauth_confirm({"auth_code": "code"}))
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        entry = await _async_create_entry_for_reauth(hass, monkeypatch)
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data("refreshed-access-token")),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(return_value=ClaudeAccountInfo("account-a", "Alice New", "Pro")),
+        )
 
-    assert events == [
-        ("unique_id", "account-b"),
-        ("abort_if_unique_id_mismatch", "wrong_account"),
-    ]
+        result = await _async_configure_reauth(hass, entry.entry_id)
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "reauth_successful"
+        assert entry.unique_id == "account-a"
+        assert entry.data[CONF_ACCESS_TOKEN] == "refreshed-access-token"
+        assert entry.data[CONF_REFRESH_TOKEN] == "new-refresh-token"
+        assert CONF_EXPIRES_AT in entry.data
+        assert entry.data[CONF_ACCOUNT_UUID] == "account-a"
+        assert entry.data[CONF_ACCOUNT_NAME] == "Alice New"
+        assert entry.data[CONF_SUBSCRIPTION_LEVEL] == "Pro"
+
+    asyncio.run(run())
+
+
+def test_reauth_rejects_mismatched_profile_without_updating_entry(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep a real entry unchanged when reauthentication identifies another account."""
+
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        entry = await _async_create_entry_for_reauth(hass, monkeypatch)
+        original_data = entry.data
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data("wrong-access-token")),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(return_value=ClaudeAccountInfo("account-b", "Bob", "Pro")),
+        )
+
+        result = await _async_configure_reauth(hass, entry.entry_id)
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "wrong_account"
+        assert entry.unique_id == "account-a"
+        assert entry.data == original_data
+
+    asyncio.run(run())
+
+
+def test_reauth_requires_profile_before_updating_entry(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep credentials unchanged when the reauthentication profile is unavailable."""
+
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        entry = await _async_create_entry_for_reauth(hass, monkeypatch)
+        original_data = entry.data
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data("unverified-access-token")),
+        )
+        monkeypatch.setattr(config_flow, "async_fetch_account_info", AsyncMock(return_value=None))
+
+        result = await _async_configure_reauth(hass, entry.entry_id)
+
+        assert result["type"] == "form"
+        assert result["errors"] == {"base": "profile_failed"}
+        assert entry.data == original_data
+
+    asyncio.run(run())
