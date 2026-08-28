@@ -248,7 +248,7 @@ challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 ### Non-Goals
 
 - **Real-time Updates:** Usage data is inherently delayed (5-hour buckets), no value in frequent polling
-- **Multiple Accounts:** Integration supports one Claude account per HA instance (create multiple config entries if needed)
+- **Multiple Accounts:** Integration supports one Claude account per config entry; multiple entries and accounts are supported
 - **API Key Auth:** Not supported by the usage endpoint, OAuth-only
 
 ## Testing Recommendations
