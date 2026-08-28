@@ -1,5 +1,10 @@
 """Tests for Claude account profile helpers."""
 
+import asyncio
+
+import pytest
+
+from custom_components.hass_claude_usage import api
 from custom_components.hass_claude_usage.api import ClaudeAccountInfo, parse_account_profile
 
 
@@ -29,3 +34,17 @@ def test_parse_account_profile_detects_pro_subscription() -> None:
     info = parse_account_profile({"account": {"uuid": "account-b", "has_claude_pro": True}})
 
     assert info == ClaudeAccountInfo("account-b", None, "Pro")
+
+
+def test_async_fetch_account_info_returns_none_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat profile request timeouts as an unavailable account profile."""
+
+    class TimeoutSession:
+        async def get(self, *args: object, **kwargs: object) -> None:
+            raise asyncio.TimeoutError
+
+    monkeypatch.setattr(api.aiohttp_client, "async_get_clientsession", lambda hass: TimeoutSession())
+
+    assert asyncio.run(api.async_fetch_account_info(object(), "access-token")) is None
