@@ -15,7 +15,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ClaudeAccountInfo, account_organization_id, async_fetch_account_info
+from .api import account_organization_id, async_fetch_account_info, format_display_name
 from .const import (
     API_BETA_HEADER,
     CONF_ACCESS_TOKEN,
@@ -68,9 +68,16 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     try:
         data = await _async_get_valid_entry_data(hass, entry)
-    except (ConfigEntryAuthFailed, UpdateFailed) as err:
+    except ConfigEntryAuthFailed as err:
+        _LOGGER.warning("Cannot migrate Claude Usage entry: reauthentication required: %s", err)
+        entry.async_start_reauth(hass)
+        return False
+    except UpdateFailed as err:
         _LOGGER.warning("Cannot migrate Claude Usage entry: token validation failed: %s", err)
         return False
+
+    if data != dict(entry.data):
+        hass.config_entries.async_update_entry(entry, data=data)
 
     info = await async_fetch_account_info(hass, data[CONF_ACCESS_TOKEN])
     if info is None:
@@ -88,7 +95,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.config_entries.async_update_entry(
         entry,
-        title=_entry_title(info),
+        title=format_display_name(
+            info.account_name,
+            info.organization_name,
+            info.organization_uuid,
+            info.subscription_level,
+        ),
         data={
             **data,
             CONF_ACCOUNT_UUID: info.account_uuid,
@@ -102,26 +114,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         version=3,
     )
     return True
-
-
-def _entry_title(info: ClaudeAccountInfo) -> str:
-    """Build a display title from account and organization details."""
-    title_details = list(
-        dict.fromkeys(
-            filter(
-                None,
-                (
-                    info.account_name,
-                    info.organization_name or info.organization_uuid,
-                    info.subscription_level,
-                ),
-            )
-        )
-    )
-    title = "Claude Usage"
-    if title_details:
-        title += f" ({' - '.join(title_details)})"
-    return title
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ClaudeUsageConfigEntry) -> None:

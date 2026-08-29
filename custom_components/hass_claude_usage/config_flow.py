@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import (
+    UNDEFINED,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
@@ -21,7 +22,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import aiohttp_client
 
-from .api import account_organization_id, async_fetch_account_info
+from .api import account_organization_id, async_fetch_account_info, format_display_name
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_ACCOUNT_NAME,
@@ -101,21 +102,12 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                             errors=errors,
                         )
 
-                    title_details = list(
-                        dict.fromkeys(
-                            filter(
-                                None,
-                                (
-                                    info.account_name,
-                                    info.organization_name or info.organization_uuid,
-                                    info.subscription_level,
-                                ),
-                            )
-                        )
+                    title = format_display_name(
+                        info.account_name,
+                        info.organization_name,
+                        info.organization_uuid,
+                        info.subscription_level,
                     )
-                    title = "Claude Usage"
-                    if title_details:
-                        title += f" ({' - '.join(title_details)})"
 
                     await self.async_set_unique_id(account_organization_id(info))
                     self._abort_if_unique_id_configured()
@@ -227,11 +219,33 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                     if info is None:
                         errors["base"] = "profile_failed"
                     else:
-                        await self.async_set_unique_id(account_organization_id(info))
-                        self._abort_if_unique_id_mismatch(reason="wrong_account")
+                        reauth_entry = self._get_reauth_entry()
+                        new_unique_id = account_organization_id(info)
 
+                        if reauth_entry.version >= self.VERSION:
+                            # Already organization-scoped: reauth must never silently
+                            # switch which account/organization this entry represents.
+                            await self.async_set_unique_id(new_unique_id)
+                            self._abort_if_unique_id_mismatch(reason="wrong_account")
+                            unique_id_update = UNDEFINED
+                        else:
+                            # Legacy (pre-v3) entry has no reliable prior organization
+                            # identity to compare against, so reauth adopts the
+                            # profile's identity the same way migration would - but
+                            # must not silently steal an identity another entry owns.
+                            owner = self.hass.config_entries.async_entry_for_domain_unique_id(
+                                DOMAIN, new_unique_id
+                            )
+                            if owner is not None and owner is not reauth_entry:
+                                return self.async_abort(reason="already_configured")
+                            unique_id_update = new_unique_id
+
+                        self.hass.config_entries.async_update_entry(
+                            reauth_entry, version=self.VERSION
+                        )
                         return self.async_update_reload_and_abort(
-                            self._get_reauth_entry(),
+                            reauth_entry,
+                            unique_id=unique_id_update,
                             data_updates={
                                 CONF_ACCESS_TOKEN: token_data["access_token"],
                                 CONF_REFRESH_TOKEN: token_data.get("refresh_token", ""),

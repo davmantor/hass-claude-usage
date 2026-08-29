@@ -405,6 +405,122 @@ def test_reauth_rejects_mismatched_profile_without_updating_entry(
     asyncio.run(run())
 
 
+def test_reauth_migrates_legacy_entry_to_composite_identity(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adopt the profile's composite identity when reauthenticating a pre-v3 entry."""
+
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        entry = await _async_create_entry_for_reauth(hass, monkeypatch)
+
+        # Simulate a pre-v3 entry: version 2 with an account-only unique_id.
+        hass.config_entries.async_update_entry(entry, version=2, unique_id="account-a")
+        assert entry.version == 2
+        assert entry.unique_id == "account-a"
+
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data("migrated-access-token")),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(
+                return_value=ClaudeAccountInfo(
+                    "account-a",
+                    "Alice",
+                    "personal-org",
+                    "Alice Personal",
+                    "claude_max",
+                    "Max",
+                )
+            ),
+        )
+
+        result = await _async_configure_reauth(hass, entry.entry_id)
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "reauth_successful"
+        assert entry.unique_id == "account-a:personal-org"
+        assert entry.version == 3
+        assert entry.data[CONF_ACCESS_TOKEN] == "migrated-access-token"
+        assert entry.data[CONF_ACCOUNT_UUID] == "account-a"
+        assert entry.data[CONF_ORGANIZATION_UUID] == "personal-org"
+
+    asyncio.run(run())
+
+
+def test_reauth_legacy_entry_collision_aborts_already_configured_without_mutation(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refuse to steal an identity another entry already owns during legacy reauth."""
+
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+
+        # Owner already holds the account-a:personal-org composite identity.
+        await _async_create_entry_for_reauth(hass, monkeypatch)
+
+        # A second, distinct entry for a different organization.
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data("legacy-access-token")),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(
+                return_value=ClaudeAccountInfo(
+                    "account-a", "Alice", "team-org", "Example Team", "claude_team", "Team"
+                )
+            ),
+        )
+        legacy_result = await _async_configure_user(hass, "legacy-code")
+        legacy_entry = legacy_result["result"]
+
+        # Simulate a pre-v3 entry whose stored identity predates the composite.
+        hass.config_entries.async_update_entry(legacy_entry, version=2, unique_id="account-a")
+        original_version = legacy_entry.version
+        original_unique_id = legacy_entry.unique_id
+        original_data = dict(legacy_entry.data)
+
+        # Reauth now resolves to the identity the owner entry already holds.
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data("collide-access-token")),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(
+                return_value=ClaudeAccountInfo(
+                    "account-a",
+                    "Alice",
+                    "personal-org",
+                    "Alice Personal",
+                    "claude_max",
+                    "Max",
+                )
+            ),
+        )
+
+        result = await _async_configure_reauth(hass, legacy_entry.entry_id)
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "already_configured"
+        assert legacy_entry.version == original_version
+        assert legacy_entry.unique_id == original_unique_id
+        assert dict(legacy_entry.data) == original_data
+
+    asyncio.run(run())
+
+
 def test_reauth_requires_profile_before_updating_entry(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,

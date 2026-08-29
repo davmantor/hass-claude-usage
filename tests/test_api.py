@@ -146,3 +146,47 @@ def test_async_fetch_account_info_returns_none_on_timeout(
     )
 
     assert asyncio.run(api.async_fetch_account_info(object(), "access-token")) is None
+
+
+def test_async_fetch_account_info_logs_warning_on_bad_status(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Log a warning containing the status code when the profile fetch fails."""
+
+    class BadStatusResponse:
+        ok = False
+        status = 401
+
+    class BadStatusSession:
+        async def get(self, *args: object, **kwargs: object) -> BadStatusResponse:
+            return BadStatusResponse()
+
+    monkeypatch.setattr(
+        api.aiohttp_client, "async_get_clientsession", lambda hass: BadStatusSession()
+    )
+
+    with caplog.at_level("WARNING"):
+        result = asyncio.run(api.async_fetch_account_info(object(), "access-token"))
+
+    assert result is None
+    assert any("401" in record.message for record in caplog.records)
+
+
+def test_async_fetch_account_info_logs_exception_on_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Log via logger.exception when the profile request raises a client error."""
+
+    class ErrorSession:
+        async def get(self, *args: object, **kwargs: object) -> None:
+            raise api.aiohttp.ClientError("boom")
+
+    monkeypatch.setattr(api.aiohttp_client, "async_get_clientsession", lambda hass: ErrorSession())
+
+    with caplog.at_level("ERROR"):
+        result = asyncio.run(api.async_fetch_account_info(object(), "access-token"))
+
+    assert result is None
+    assert any(record.exc_info for record in caplog.records)

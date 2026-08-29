@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import ClaudeUsageConfigEntry, ClaudeUsageCoordinator
+from .api import format_display_name
 from .const import (
     BINARY_SENSOR_DEFINITIONS,
     CONF_ACCOUNT_NAME,
@@ -62,17 +63,15 @@ class ClaudeUsageBinarySensor(CoordinatorEntity[ClaudeUsageCoordinator], BinaryS
             self._attr_device_class = BinarySensorDeviceClass.PROBLEM
 
         account_name = entry.data.get(CONF_ACCOUNT_NAME)
-        organization_name = entry.data.get(CONF_ORGANIZATION_NAME) or entry.data.get(
-            CONF_ORGANIZATION_UUID
-        )
+        organization_name = entry.data.get(CONF_ORGANIZATION_NAME)
         subscription_level = entry.data.get(CONF_SUBSCRIPTION_LEVEL)
 
-        device_name_details = list(
-            dict.fromkeys(filter(None, (account_name, organization_name, subscription_level)))
+        device_name = format_display_name(
+            account_name,
+            organization_name,
+            entry.data.get(CONF_ORGANIZATION_UUID),
+            subscription_level,
         )
-        device_name = "Claude Usage"
-        if device_name_details:
-            device_name += f" ({' - '.join(device_name_details)})"
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},

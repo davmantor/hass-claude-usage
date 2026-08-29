@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
 
 from .const import API_BETA_HEADER, PROFILE_API_URL
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,27 @@ class ClaudeAccountInfo:
 def account_organization_id(info: ClaudeAccountInfo) -> str:
     """Return the stable account and organization identity."""
     return f"{info.account_uuid}:{info.organization_uuid}"
+
+
+def format_display_name(
+    account_name: str | None,
+    organization_name: str | None,
+    organization_uuid: str | None,
+    subscription_level: str | None,
+) -> str:
+    """Build the shared Claude Usage entry title / device name."""
+    details = list(
+        dict.fromkeys(
+            filter(
+                None,
+                (account_name, organization_name or organization_uuid, subscription_level),
+            )
+        )
+    )
+    name = "Claude Usage"
+    if details:
+        name += f" ({' - '.join(details)})"
+    return name
 
 
 def parse_account_profile(profile: dict[str, Any]) -> ClaudeAccountInfo | None:
@@ -94,11 +118,14 @@ async def async_fetch_account_info(
             timeout=aiohttp.ClientTimeout(total=15),
         )
         if not response.ok:
+            _LOGGER.warning("Failed to fetch account profile (%s)", response.status)
             return None
         profile = await response.json()
-    except (aiohttp.ClientError, TimeoutError, TypeError, ValueError):
+    except (aiohttp.ClientError, TimeoutError, ValueError):
+        _LOGGER.exception("Error fetching account profile")
         return None
 
     if not isinstance(profile, dict):
+        _LOGGER.warning("Account profile response is not a JSON object")
         return None
     return parse_account_profile(profile)

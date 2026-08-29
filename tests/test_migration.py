@@ -142,6 +142,7 @@ def test_real_registered_entry_collision_does_not_mutate(
             CONF_REFRESH_TOKEN: "legacy-refresh-token",
             "unrelated": "preserved",
         }
+        refreshed_data = {**original_data, CONF_ACCESS_TOKEN: "refreshed-token"}
         options = {"update_interval": 900}
         legacy = _registered_entry(
             hass,
@@ -155,7 +156,7 @@ def test_real_registered_entry_collision_does_not_mutate(
         monkeypatch.setattr(
             integration,
             "_async_get_valid_entry_data",
-            AsyncMock(return_value={**original_data, CONF_ACCESS_TOKEN: "refreshed-token"}),
+            AsyncMock(return_value=refreshed_data),
         )
         monkeypatch.setattr(
             integration,
@@ -165,11 +166,13 @@ def test_real_registered_entry_collision_does_not_mutate(
 
         assert await integration.async_migrate_entry(hass, legacy) is False
 
+        # The rotated refresh token is still committed even though the
+        # identity fields (unique_id/version/title) are never touched.
         assert legacy.version == 1
         assert legacy.unique_id == DOMAIN
-        assert dict(legacy.data) == original_data
+        assert dict(legacy.data) == refreshed_data
         assert dict(legacy.options) == options
-        update_entry.assert_not_called()
+        update_entry.assert_called_once_with(legacy, data=refreshed_data)
         assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DOMAIN) is legacy
         assert hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, ACCOUNT_ORG_ID) is owner
 
@@ -226,15 +229,10 @@ def test_real_registered_entry_different_organization_does_not_collide(
     asyncio.run(run())
 
 
-@pytest.mark.parametrize(
-    "error",
-    [ConfigEntryAuthFailed("invalid token"), UpdateFailed("refresh unavailable")],
-)
-def test_token_validation_failure_leaves_legacy_entry_untouched(
+def test_update_failed_leaves_legacy_entry_untouched(
     monkeypatch: pytest.MonkeyPatch,
-    error: Exception,
 ) -> None:
-    """Abort migration without a write when credentials cannot be validated."""
+    """Abort migration without a write when token refresh itself fails."""
 
     async def run() -> None:
         original_data = {
@@ -248,7 +246,7 @@ def test_token_validation_failure_leaves_legacy_entry_untouched(
         hass = SimpleNamespace(
             config_entries=SimpleNamespace(async_update_entry=update_entry),
         )
-        get_valid_data = AsyncMock(side_effect=error)
+        get_valid_data = AsyncMock(side_effect=UpdateFailed("refresh unavailable"))
         fetch_account_info = AsyncMock()
         monkeypatch.setattr(integration, "_async_get_valid_entry_data", get_valid_data)
         monkeypatch.setattr(integration, "async_fetch_account_info", fetch_account_info)
@@ -263,10 +261,57 @@ def test_token_validation_failure_leaves_legacy_entry_untouched(
     asyncio.run(run())
 
 
-def test_profile_identity_failure_leaves_legacy_entry_untouched(
+def test_auth_failed_starts_reauth_and_leaves_legacy_entry_untouched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Abort migration without committing refreshed data when identity is missing."""
+    """Trigger reauth and abort migration without a write when the token is invalid."""
+
+    async def run() -> None:
+        original_data = {
+            CONF_ACCESS_TOKEN: "old-access-token",
+            CONF_REFRESH_TOKEN: "old-refresh-token",
+            "unrelated": "preserved",
+        }
+        options = {"update_interval": 900}
+        start_reauth = MagicMock()
+        entry = SimpleNamespace(
+            version=1,
+            unique_id=DOMAIN,
+            data=original_data,
+            options=options,
+            async_start_reauth=start_reauth,
+        )
+        update_entry = MagicMock()
+        hass = SimpleNamespace(
+            config_entries=SimpleNamespace(async_update_entry=update_entry),
+        )
+        get_valid_data = AsyncMock(side_effect=ConfigEntryAuthFailed("invalid token"))
+        fetch_account_info = AsyncMock()
+        monkeypatch.setattr(integration, "_async_get_valid_entry_data", get_valid_data)
+        monkeypatch.setattr(integration, "async_fetch_account_info", fetch_account_info)
+
+        assert await integration.async_migrate_entry(hass, entry) is False
+
+        start_reauth.assert_called_once_with(hass)
+        fetch_account_info.assert_not_awaited()
+        update_entry.assert_not_called()
+        assert entry.data == original_data
+        assert entry.options == options
+
+    asyncio.run(run())
+
+
+def _apply_entry_update(entry: SimpleNamespace, **kwargs: Any) -> None:
+    """Mimic Home Assistant's async_update_entry mutating only passed fields."""
+    for field in ("data", "unique_id", "version", "title"):
+        if field in kwargs:
+            setattr(entry, field, kwargs[field])
+
+
+def test_profile_identity_failure_persists_refreshed_token_without_changing_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Commit a mid-flight token refresh even when the profile fetch then fails."""
 
     async def run() -> None:
         original_data = {
@@ -282,7 +327,7 @@ def test_profile_identity_failure_leaves_legacy_entry_untouched(
         }
         options = {"update_interval": 900}
         entry = SimpleNamespace(version=1, unique_id=DOMAIN, data=original_data, options=options)
-        update_entry = MagicMock()
+        update_entry = MagicMock(side_effect=_apply_entry_update)
         hass = SimpleNamespace(
             config_entries=SimpleNamespace(async_update_entry=update_entry),
         )
@@ -299,8 +344,10 @@ def test_profile_identity_failure_leaves_legacy_entry_untouched(
 
         assert await integration.async_migrate_entry(hass, entry) is False
 
-        update_entry.assert_not_called()
-        assert entry.data == original_data
+        update_entry.assert_called_once_with(entry, data=valid_data)
+        assert entry.data == valid_data
+        assert entry.version == 1
+        assert entry.unique_id == DOMAIN
         assert entry.options == options
 
     asyncio.run(run())

@@ -22,8 +22,8 @@
       "profile_failed": "Failed to verify your Claude account. Please try again."
     },
     "abort": {
-      "already_configured": "This Claude account is already configured.",
-      "wrong_account": "The authenticated Claude account does not match this entry.",
+      "already_configured": "This Claude account and organization are already configured.",
+      "wrong_account": "The authenticated Claude account and organization do not match this entry. Re-authorize and select the same organization.",
       "reauth_successful": "Re-authentication was successful"
     }
   },
