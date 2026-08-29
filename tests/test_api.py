@@ -38,12 +38,15 @@ def test_parse_account_profile_uses_selected_team_organization() -> None:
 
 def test_parse_account_profile_requires_uuid() -> None:
     """Ignore profiles that do not provide a stable account identity."""
-    assert parse_account_profile(
-        {
-            "account": {"email": "alice@example.com"},
-            "organization": {"uuid": "org-a"},
-        }
-    ) is None
+    assert (
+        parse_account_profile(
+            {
+                "account": {"email": "alice@example.com"},
+                "organization": {"uuid": "org-a"},
+            }
+        )
+        is None
+    )
 
 
 def test_parse_account_profile_requires_organization_uuid() -> None:
@@ -54,12 +57,15 @@ def test_parse_account_profile_requires_organization_uuid() -> None:
 @pytest.mark.parametrize("account_uuid", ["", "   ", "\t\r\n"])
 def test_parse_account_profile_rejects_blank_uuid(account_uuid: str) -> None:
     """Reject UUID values that contain no non-whitespace characters."""
-    assert parse_account_profile(
-        {
-            "account": {"uuid": account_uuid},
-            "organization": {"uuid": "org-a"},
-        }
-    ) is None
+    assert (
+        parse_account_profile(
+            {
+                "account": {"uuid": account_uuid},
+                "organization": {"uuid": "org-a"},
+            }
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("organization_uuid", ["", "   ", "\t\r\n"])
@@ -67,12 +73,15 @@ def test_parse_account_profile_rejects_blank_organization_uuid(
     organization_uuid: str,
 ) -> None:
     """Reject organization UUID values that contain no non-whitespace characters."""
-    assert parse_account_profile(
-        {
-            "account": {"uuid": "account-a"},
-            "organization": {"uuid": organization_uuid},
-        }
-    ) is None
+    assert (
+        parse_account_profile(
+            {
+                "account": {"uuid": "account-a"},
+                "organization": {"uuid": organization_uuid},
+            }
+        )
+        is None
+    )
 
 
 def test_parse_account_profile_strips_uuid_whitespace() -> None:
