@@ -15,13 +15,16 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import async_fetch_account_info
+from .api import ClaudeAccountInfo, account_organization_id, async_fetch_account_info
 from .const import (
     API_BETA_HEADER,
     CONF_ACCESS_TOKEN,
     CONF_ACCOUNT_NAME,
     CONF_ACCOUNT_UUID,
     CONF_EXPIRES_AT,
+    CONF_ORGANIZATION_NAME,
+    CONF_ORGANIZATION_TYPE,
+    CONF_ORGANIZATION_UUID,
     CONF_REFRESH_TOKEN,
     CONF_SUBSCRIPTION_LEVEL,
     CONF_UPDATE_INTERVAL,
@@ -56,10 +59,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ClaudeUsageConfigEntry)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migrate a legacy entry to stable account identity."""
-    if entry.version == 2:
+    """Migrate a legacy entry to organization-scoped identity."""
+    if entry.version == 3:
         return True
-    if entry.version != 1:
+    if entry.version not in (1, 2):
         _LOGGER.warning("Cannot migrate Claude Usage entry: unsupported version %s", entry.version)
         return False
 
@@ -74,26 +77,51 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Cannot migrate Claude Usage entry: profile identity unavailable")
         return False
 
-    owner = hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, info.account_uuid)
+    unique_id = account_organization_id(info)
+    owner = hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, unique_id)
     if owner is not None and owner is not entry:
         _LOGGER.warning(
-            "Cannot migrate Claude Usage entry: account UUID %s is already configured",
-            info.account_uuid,
+            "Cannot migrate Claude Usage entry: organization %s is already configured",
+            unique_id,
         )
         return False
 
     hass.config_entries.async_update_entry(
         entry,
+        title=_entry_title(info),
         data={
             **data,
             CONF_ACCOUNT_UUID: info.account_uuid,
             CONF_ACCOUNT_NAME: info.account_name,
+            CONF_ORGANIZATION_UUID: info.organization_uuid,
+            CONF_ORGANIZATION_NAME: info.organization_name,
+            CONF_ORGANIZATION_TYPE: info.organization_type,
             CONF_SUBSCRIPTION_LEVEL: info.subscription_level,
         },
-        unique_id=info.account_uuid,
-        version=2,
+        unique_id=unique_id,
+        version=3,
     )
     return True
+
+
+def _entry_title(info: ClaudeAccountInfo) -> str:
+    """Build a display title from account and organization details."""
+    title_details = list(
+        dict.fromkeys(
+            filter(
+                None,
+                (
+                    info.account_name,
+                    info.organization_name or info.organization_uuid,
+                    info.subscription_level,
+                ),
+            )
+        )
+    )
+    title = "Claude Usage"
+    if title_details:
+        title += f" ({' - '.join(title_details)})"
+    return title
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ClaudeUsageConfigEntry) -> None:

@@ -48,11 +48,12 @@ Refactored from a standalone daemon concept originally explored in the `cc-playg
 
 ### Multiple Account Entries
 
-**Decision:** Support one Claude account per config entry; multiple entries and accounts are supported.
+**Decision:** Support one Claude account+organization per config entry; multiple entries, accounts, and organizations are supported.
 
 **Rationale:**
-- The account UUID provides stable identity and duplicate detection per Claude account
-- Separate config entries keep credentials and coordinator state isolated per account
+- The composite `<account_uuid>:<organization_uuid>` identity provides stable identity and duplicate detection per account/organization pair
+- One account can have multiple organization-scoped entries, each selected through the OAuth picker during setup
+- Separate config entries keep credentials and coordinator state isolated per account/organization
 
 ### Deferred Loading
 
@@ -256,7 +257,7 @@ challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 ### Non-Goals
 
 - **Real-time Updates:** Usage data is inherently delayed (5-hour buckets), no value in frequent polling
-- **Multiple Organizations:** Multiple organizations under one Claude account are not supported because the OAuth profile exposes only one active/default organization
+- **Independent Organization Enumeration:** The integration cannot list a Claude account's organizations itself; each organization-scoped entry must be added by picking that organization during the OAuth authorization flow
 - **API Key Auth:** Not supported by the usage endpoint, OAuth-only
 
 ## Testing Recommendations
