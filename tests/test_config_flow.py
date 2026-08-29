@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock
 import pytest
 from homeassistant import loader
 from homeassistant.bootstrap import async_load_base_functionality
-from homeassistant.config_entries import ConfigEntries, SOURCE_REAUTH, SOURCE_USER
+from homeassistant.config_entries import (
+    ConfigEntries,
+    ConfigEntryState,
+    SOURCE_REAUTH,
+    SOURCE_USER,
+)
 from homeassistant.core import HomeAssistant
 
 from custom_components.hass_claude_usage import config_flow
@@ -517,6 +522,80 @@ def test_reauth_legacy_entry_collision_aborts_already_configured_without_mutatio
         assert legacy_entry.version == original_version
         assert legacy_entry.unique_id == original_unique_id
         assert dict(legacy_entry.data) == original_data
+
+    asyncio.run(run())
+
+
+def test_reauth_migrates_legacy_entry_stuck_in_migration_error_without_live_reload(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Update a migration-failed legacy entry without attempting a live reload.
+
+    A legacy entry that reached reauth via a failed migration is left in the
+    non-recoverable MIGRATION_ERROR state. Home Assistant cannot unload an
+    entry that was never fully set up, so scheduling a reload here would
+    raise OperationNotAllowed inside a background task. The fix must still
+    persist the corrected identity/tokens but skip the live reload and tell
+    the user a restart is required instead of falsely claiming success.
+    """
+
+    async def run() -> None:
+        hass = await _async_hass(tmp_path, monkeypatch)
+        entry = await _async_create_entry_for_reauth(hass, monkeypatch)
+
+        # Simulate a pre-v3 entry: version 2 with an account-only unique_id.
+        hass.config_entries.async_update_entry(entry, version=2, unique_id="account-a")
+        assert entry.version == 2
+        assert entry.unique_id == "account-a"
+
+        # Force the entry into the non-recoverable state a real failed
+        # migration would leave it in. Home Assistant exposes no public API
+        # to reach this state from outside a real failed async_setup.
+        entry._async_set_state(hass, ConfigEntryState.MIGRATION_ERROR, None)
+        assert entry.state is ConfigEntryState.MIGRATION_ERROR
+        assert entry.state.recoverable is False
+
+        monkeypatch.setattr(
+            config_flow.ClaudeUsageConfigFlow,
+            "_exchange_code",
+            AsyncMock(return_value=_token_data("migrated-access-token")),
+        )
+        monkeypatch.setattr(
+            config_flow,
+            "async_fetch_account_info",
+            AsyncMock(
+                return_value=ClaudeAccountInfo(
+                    "account-a",
+                    "Alice",
+                    "personal-org",
+                    "Alice Personal",
+                    "claude_max",
+                    "Max",
+                )
+            ),
+        )
+
+        result = await _async_configure_reauth(hass, entry.entry_id)
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "reauth_successful_restart_required"
+        assert entry.unique_id == "account-a:personal-org"
+        assert entry.version == 3
+        assert entry.data[CONF_ACCESS_TOKEN] == "migrated-access-token"
+        assert entry.data[CONF_REFRESH_TOKEN] == "new-refresh-token"
+        assert entry.data[CONF_ACCOUNT_UUID] == "account-a"
+        assert entry.data[CONF_ACCOUNT_NAME] == "Alice"
+        assert entry.data[CONF_ORGANIZATION_UUID] == "personal-org"
+        assert entry.data[CONF_ORGANIZATION_NAME] == "Alice Personal"
+        assert entry.data[CONF_ORGANIZATION_TYPE] == "claude_max"
+        assert entry.data[CONF_SUBSCRIPTION_LEVEL] == "Max"
+
+        # No exception propagated out of the flow above. Confirm no
+        # reload/unload attempt was silently made either: the entry's
+        # state must still be the untouched MIGRATION_ERROR it started
+        # with, since any reload attempt would try to unload it first.
+        assert entry.state is ConfigEntryState.MIGRATION_ERROR
 
     asyncio.run(run())
 

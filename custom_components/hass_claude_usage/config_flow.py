@@ -13,7 +13,6 @@ from urllib.parse import urlencode
 import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import (
-    UNDEFINED,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
@@ -221,43 +220,65 @@ class ClaudeUsageConfigFlow(ConfigFlow, domain=DOMAIN):
                     else:
                         reauth_entry = self._get_reauth_entry()
                         new_unique_id = account_organization_id(info)
+                        data_updates = {
+                            CONF_ACCESS_TOKEN: token_data["access_token"],
+                            CONF_REFRESH_TOKEN: token_data.get("refresh_token", ""),
+                            CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
+                            CONF_ACCOUNT_UUID: info.account_uuid,
+                            CONF_ACCOUNT_NAME: info.account_name,
+                            CONF_ORGANIZATION_UUID: info.organization_uuid,
+                            CONF_ORGANIZATION_NAME: info.organization_name,
+                            CONF_ORGANIZATION_TYPE: info.organization_type,
+                            CONF_SUBSCRIPTION_LEVEL: info.subscription_level,
+                        }
 
                         if reauth_entry.version >= self.VERSION:
                             # Already organization-scoped: reauth must never silently
                             # switch which account/organization this entry represents.
+                            # The entry is already set up (or at least in a recoverable
+                            # state), so the normal update-and-reload path applies.
                             await self.async_set_unique_id(new_unique_id)
                             self._abort_if_unique_id_mismatch(reason="wrong_account")
-                            unique_id_update = UNDEFINED
-                        else:
-                            # Legacy (pre-v3) entry has no reliable prior organization
-                            # identity to compare against, so reauth adopts the
-                            # profile's identity the same way migration would - but
-                            # must not silently steal an identity another entry owns.
-                            owner = self.hass.config_entries.async_entry_for_domain_unique_id(
-                                DOMAIN, new_unique_id
+                            return self.async_update_reload_and_abort(
+                                reauth_entry,
+                                data_updates=data_updates,
                             )
-                            if owner is not None and owner is not reauth_entry:
-                                return self.async_abort(reason="already_configured")
-                            unique_id_update = new_unique_id
+
+                        # Legacy (pre-v3) entry has no reliable prior organization
+                        # identity to compare against, so reauth adopts the
+                        # profile's identity the same way migration would - but
+                        # must not silently steal an identity another entry owns.
+                        owner = self.hass.config_entries.async_entry_for_domain_unique_id(
+                            DOMAIN, new_unique_id
+                        )
+                        if owner is not None and owner is not reauth_entry:
+                            return self.async_abort(reason="already_configured")
 
                         self.hass.config_entries.async_update_entry(
-                            reauth_entry, version=self.VERSION
-                        )
-                        return self.async_update_reload_and_abort(
                             reauth_entry,
-                            unique_id=unique_id_update,
-                            data_updates={
-                                CONF_ACCESS_TOKEN: token_data["access_token"],
-                                CONF_REFRESH_TOKEN: token_data.get("refresh_token", ""),
-                                CONF_EXPIRES_AT: time.time() + token_data.get("expires_in", 3600),
-                                CONF_ACCOUNT_UUID: info.account_uuid,
-                                CONF_ACCOUNT_NAME: info.account_name,
-                                CONF_ORGANIZATION_UUID: info.organization_uuid,
-                                CONF_ORGANIZATION_NAME: info.organization_name,
-                                CONF_ORGANIZATION_TYPE: info.organization_type,
-                                CONF_SUBSCRIPTION_LEVEL: info.subscription_level,
-                            },
+                            unique_id=new_unique_id,
+                            version=self.VERSION,
+                            title=format_display_name(
+                                info.account_name,
+                                info.organization_name,
+                                info.organization_uuid,
+                                info.subscription_level,
+                            ),
+                            data={**reauth_entry.data, **data_updates},
                         )
+
+                        # A legacy entry that reached reauth via a failed migration
+                        # is in the non-recoverable MIGRATION_ERROR state. Home
+                        # Assistant cannot unload an entry that was never fully set
+                        # up, so reloading it here would raise OperationNotAllowed
+                        # inside a background task. The corrected data is already
+                        # saved either way; only skip the live reload for a
+                        # non-recoverable state and tell the user a restart is
+                        # required instead of falsely reporting full success.
+                        if reauth_entry.state.recoverable:
+                            self.hass.config_entries.async_schedule_reload(reauth_entry.entry_id)
+                            return self.async_abort(reason="reauth_successful")
+                        return self.async_abort(reason="reauth_successful_restart_required")
 
         return self.async_show_form(
             step_id="reauth_confirm",

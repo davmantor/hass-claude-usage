@@ -24,7 +24,8 @@
     "abort": {
       "already_configured": "This Claude account and organization are already configured.",
       "wrong_account": "The authenticated Claude account and organization do not match this entry. Re-authorize and select the same organization.",
-      "reauth_successful": "Re-authentication was successful"
+      "reauth_successful": "Re-authentication was successful",
+      "reauth_successful_restart_required": "Re-authentication was successful. Restart Home Assistant to finish loading this entry."
     }
   },
   "options": {
